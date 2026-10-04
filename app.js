@@ -5,17 +5,24 @@ import { RoomEnvironment } from './vendor/RoomEnvironment.js';
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const state = { mode: 'outside', step: 'overview', playing: !reduceMotion, speed: 1, heat: .7, flows: true, phase: 0, time: 0, cover: 0, rendered: false };
-const steps = ['overview','boiler','turbine','generator','condenser'];
-const detail = {
- overview: {title:'見えないところで、<br>つながっている。', text:'燃料を燃やした熱で水を蒸気にし、その力でタービンを回します。つながった発電機で、回転のエネルギーが電気へ変わります。', tag:'化学エネルギー → 熱 → 回転 → 電気', note:'エネルギーはゼロから生まれるのではなく、形を変えて受け渡されます。'},
- boiler: {title:'熱を受け取って、<br>水から蒸気へ。', text:'燃料が燃えると熱が出ます。炉の中の管を通る水が熱を受け取り、高温・高圧の蒸気になります。蒸気は上の配管からタービンへ。', tag:'燃料の化学エネルギー → 熱', note:'炎がタービンを直接回すのではありません。燃焼ガスと水・蒸気は、管の壁をはさんだ別の流れです。'},
- turbine: {title:'蒸気が羽根を押す。<br>軸が回り出す。', text:'蒸気は固定羽根で向きを整えられ、回転羽根を押します。羽根と一体の軸が回り、その回転を発電機へ伝えます。蒸気は仕事をして、圧力と温度が下がります。', tag:'蒸気のエネルギー → 回転のエネルギー', note:'銀色の羽根が軸と一緒に回り、外側についた固定羽根は止まったまま。実物は高速回転するため、動きを遅く表示しています。'},
- generator: {title:'回る磁石が、<br>電気を生み出す。', text:'タービンにつながった磁石が、固定されたコイルの内側で回ります。コイルを通る磁界のようすが変化して電圧が生じ、つながった送電回路へ交流の電気エネルギーを送り出します。', tag:'回転のエネルギー → 電気エネルギー', note:'赤・青はN極・S極。実物の磁石は電磁石です。波形は1組のコイルに生じる電圧の模式図。黄色の光は電気エネルギーの伝わる向きで、電子の動きではありません。'},
- condenser: {title:'冷やして戻す。<br>水の旅はつづく。', text:'仕事を終えた蒸気は、冷たい水が通る管に触れて熱を失い、水へ戻ります。給水ポンプがその水をボイラーへ送り、同じ水が繰り返し使われます。', tag:'蒸気 → 水 → ポンプ → ボイラー', note:'青い主系統の水と、緑色の冷却水は混ざりません。蒸気の熱だけが管の壁を通って冷却水へ移ります。ポンプには電力が必要です。'}
+const state = { mode:'cutaway', step:'overview', started:false, playing:false, follow:!reduceMotion, speed:1, time:0, phase:0, cover:1, rendered:false, stage:'idle' };
+let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment,fireLight,sparks,loadLight,loadBulb;
+const flowMaterials=[],covers=[],boilerWalls=[],flowSystems=[],flames=[],pickables=[],parts={},fieldMaterials=[];
+const stages = [
+ {at:0,name:'condenser'}, {at:1,name:'feedwater'}, {at:5.8,name:'boiler'},
+ {at:9.6,name:'superheater'}, {at:11.6,name:'steam'}, {at:12.7,name:'turbine'},
+ {at:17,name:'generator'}, {at:22,name:'return'}, {at:27,name:'overview'}, {at:30,name:'complete'}
+];
+const timings = {
+ water:{start:1,velocity:1.65},boiler:{start:5.8,velocity:1.1},
+ superheater:{start:9.6,velocity:6.5},steam:{start:11.6,velocity:10.5},
+ internal:{start:12.25,velocity:9},'steam-out':{start:13,velocity:3.5},
+ condensation:{start:14.8,velocity:.8},'heat-transfer':{start:14.8,velocity:.6},
+ electric:{start:13.1,velocity:5.4},'load-electric':{start:15.2,velocity:4.4},
+ cooling:{start:.35,velocity:1.1},exhaust:{start:5.8,velocity:1.4}
 };
-let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment;
-const flowMaterials=[],covers=[],boilerWalls=[],flowSystems=[],flames=[],labels=[],pickables=[],parts={},hotMaterials=[];
+const clamp=THREE.MathUtils.clamp;
+function ramp(t,a,b){const f=clamp((t-a)/(b-a),0,1);return f*f*(3-2*f);}
 const v=(a)=>new THREE.Vector3(...a);
 const steel= new THREE.MeshStandardMaterial({color:0xb2c4be,metalness:.68,roughness:.32});
 const cream= new THREE.MeshStandardMaterial({color:0xc7d1ad,metalness:.28,roughness:.43});
@@ -34,10 +41,21 @@ function cylinder(r1,r2,len,pos,mat=steel,parent=root,axis='x',segments=40){cons
 function torus(r,t,pos,mat=steel,parent=root,axis='x'){const m=mesh(new THREE.TorusGeometry(r,t,8,48),mat,pos,parent);if(axis==='x')m.rotation.y=Math.PI/2;if(axis==='y')m.rotation.x=Math.PI/2;return m;}
 function pipe(points,r,mat,parent=root,rounded=true){const curve=rounded?new THREE.CatmullRomCurve3(points.map(v),false,'centripetal'):new THREE.CurvePath();if(!rounded) for(let i=0;i<points.length-1;i++)curve.add(new THREE.LineCurve3(v(points[i]),v(points[i+1])));const m=mesh(new THREE.TubeGeometry(curve,Math.max(24,points.length*12),r,10,false),mat,[0,0,0],parent);return {mesh:m,curve};}
 function lineBetween(a,b,r,mat,parent=root){const delta=v(b).sub(v(a)),m=cylinder(r,r,delta.length(),v(a).add(v(b)).multiplyScalar(.5).toArray(),mat,parent,'y',10);m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize());return m;}
-function flow(curve,color,count=28,speed=.12,type='fluid',radius=.075){const g=new THREE.SphereGeometry(radius,7,5);const mat=['boiler','condensation'].includes(type)?new THREE.MeshBasicMaterial({color:0xffffff}):emissive(color,.7);const inst=new THREE.InstancedMesh(g,mat,count);inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);root.add(inst);flowSystems.push({curve,inst,count,speed,type});return inst;}
-function flowPipe(points,r,mat,color,speed=.13,type='fluid'){const m=mat.clone();m.transparent=true;m.opacity=.57;m.depthWrite=false;flowMaterials.push(m);const p=pipe(points,r,m);flow(p.curve,color,32,speed,type,r*.68);return p;}
+function flow(curve,color,count=28,speed=.12,type='fluid',radius=.075){
+ const fast=['steam','internal','superheater'].includes(type);
+ if(fast)count=type==='steam'?13:type==='internal'?18:20;
+ if(type==='steam-out'){count=12;radius*=.55;}
+ if(type==='steam')color=0xffc451;
+ const g=fast?new THREE.ConeGeometry(radius*.65,radius*3.5,6):new THREE.SphereGeometry(radius,7,5);
+ const mat=new THREE.MeshBasicMaterial({color:['boiler','condensation'].includes(type)?0xffffff:color,toneMapped:false});
+ const inst=new THREE.InstancedMesh(g,mat,count);inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);inst.frustumCulled=false;root.add(inst);
+ const length=curve.getLength(),timing=timings[type]||{start:0,velocity:1};
+ const samples=Array.from({length:601},(_,i)=>curve.getPointAt(i/600));
+ const rotations=fast?Array.from({length:601},(_,i)=>new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),curve.getTangentAt(i/600).normalize())):null;
+ flowSystems.push({curve,inst,count,speed,type,length,fast,samples,rotations,...timing,visibleCount:0});return inst;
+}
+function flowPipe(points,r,mat,color,speed=.13,type='fluid'){const m=mat.clone();m.transparent=true;m.opacity=['steam','superheater'].includes(type)?.30:.52;m.depthWrite=false;flowMaterials.push(m);const p=pipe(points,r,m);flow(p.curve,color,32,speed,type,r*.68);return p;}
 function group(name){const g=new THREE.Group();g.userData.part=name;root.add(g);parts[name]=g;return g;}
-function addLabel(name,text,index,pos){const el=document.createElement('button');el.className='model-label';el.innerHTML=`<b>${index}</b>${text}`;el.setAttribute('aria-label',`${text}を拡大して観察`);el.addEventListener('click',()=>selectStep(name));$('#model-labels').append(el);labels.push({name,el,pos:v(pos)});}
 function bolts(x,r,y,z,parent){for(let i=0;i<12;i++){const a=i/12*Math.PI*2;cylinder(.042,.042,.11,[x,y+Math.cos(a)*r,z+Math.sin(a)*r],steel,parent,'x',6);}}
 function bearing(x,y,z,parent){box([.32,.48,.65],[x,y-.6,z],cream,parent);cylinder(.29,.29,.38,[x,y,z],cream,parent);torus(.23,.04,[x+.2,y,z],dark,parent);}
 function shellHalf(x,y,z,r1,r2,len,mat,parent,upper){const g=new THREE.CylinderGeometry(r1,r2,len,56,1,true,upper?Math.PI:0,Math.PI);const m=mesh(g,mat,[x,y,z],parent);m.rotation.z=-Math.PI/2;return m;}
@@ -61,9 +79,7 @@ function buildBoiler(){
  flowPipe([[-7.3,5.42,-1.4],[-7.4,5.1,-.8],[-7.35,4.55,.62]],.09,hot,0xffddb1,.12,'superheater');
  const grate=box([2.7,.14,2.5],[-6.1,.91,-.4],dark,g);
  for(let i=0;i<12;i++)box([.10,.08,2.25],[-7.27+i*.21,1.02,-.4],steel,g);
- const flameMat=emissive(0xf48a27,1.6),innerMat=emissive(0xffda63,1.7);hotMaterials.push(flameMat,innerMat);
- for(let i=0;i<11;i++){const x=-7.13+(i%4)*.62,z=-1.2+Math.floor(i/4)*.73;const f=mesh(new THREE.ConeGeometry(.23,.95,7),flameMat,[x,1.47,z],g);const inner=mesh(new THREE.ConeGeometry(.12,.55,7),innerMat,[x,1.27,z+.03],g);flames.push({f,inner,offset:i*.93});}
- const warm=new THREE.PointLight(0xff8b32,30,6);warm.position.set(-6.1,2,-.3);g.add(warm);
+ buildFire(g);
  box([.8,.65,.6],[-6.8,1.2,1.62],dark,walls);
  for(let i=0;i<4;i++)cylinder(.14,.14,.4,[-7+i*.65,1.42,1.47],dark,g,'z');
  // Separate flue-gas duct and stack: combustion gases never enter the steam circuit.
@@ -74,7 +90,6 @@ function buildBoiler(){
  // Access ladder, handrails and platform.
  for(let z of [-.7,-.22])lineBetween([-7.91,.7,z],[-7.91,5.85,z],.027,steel,g);
  for(let y=1;y<5.85;y+=.32)lineBetween([-7.95,y,-.7],[-7.95,y,-.22],.025,steel,g);
- addLabel('boiler','ボイラー','01',[-6.1,6.4,1.1]);
 }
 function buildTurbine(){
  const g=group('turbine'),y=3.35;
@@ -100,8 +115,8 @@ function buildTurbine(){
  }
  bearing(-3.04,y,0,g);bearing(1.83,y,0,g);bearing(2.43,y,0,g);
  cylinder(.3,.3,.23,[2.1,0,0],dark,rotor); // coupling animated with the same shaft
- const path=pipe([[-2.7,y+.25,0],[-1.7,y+.38,.08],[-.5,y+.4,.13],[.9,y+.43,.18],[1.15,y-.25,.25]],.045,new THREE.MeshBasicMaterial({visible:false}));flow(path.curve,0xffdc9c,46,.17,'internal',.055);
- addLabel('turbine','タービン','02',[-.8,4.98,.8]);
+ const path=pipe([[-2.7,y+.25,0],[-1.7,y+.38,.08],[-.5,y+.4,.13],[.9,y+.43,.18],[1.15,y-.25,.25]],.045,new THREE.MeshBasicMaterial({visible:false}));flow(path.curve,0xffcc66,46,.17,'internal',.055);
+ for(const z of [-.24,.24]){const jet=new THREE.CatmullRomCurve3([[-2.64,y+.28,z],[-2.0,y+.33,z],[-1,y+.40,z],[.9,y+.43,z],[1.15,y-.25,.25]].map(v));flow(jet,0xffdca0,18,.17,'internal',.028);}
  // Walkway and rail, placed at the far side so the front cutaway stays visible.
  box([8.8,.10,.65],[.65,2.06,-1.82],dark,g);
  for(let x=-3.5;x<5;x+=.7)lineBetween([x,2.1,-2.12],[x,2.9,-2.12],.018,support,g);
@@ -115,7 +130,7 @@ function buildGenerator(){
  const cover=new THREE.Group();g.add(cover);shellHalf(x,y,0,.95,.95,2.65,mat,cover,true);covers.push({obj:cover,amount:2.7,part:'generator'});
  for(let a of [-1,1]){torus(.94,.075,[x+a*1.36,y,0],cream,g);bolts(x+a*1.43,.82,y,0,g);}
  // Closed stator-coil loops: two axial sides joined by curved end windings.
- // Six coils are simplified spatially; the waveform follows one fixed coil.
+ // Six closed, stationary coils are simplified spatially.
  for(let i=0;i<6;i++)for(let strand=0;strand<2;strand++){
  const a=i/6*Math.PI*2+.03*strand,b=a+Math.PI*.78,r=.73+strand*.043,pts=[];
  const at=(xx,ang,rr=r)=>[xx,y+Math.cos(ang)*rr,Math.sin(ang)*rr];
@@ -135,11 +150,10 @@ function buildGenerator(){
  const c=document.createElement('canvas');c.width=64;c.height=64;const ctx=c.getContext('2d');ctx.fillStyle=color;ctx.font='bold 46px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(letter,32,34);const t=new THREE.CanvasTexture(c);const m=mesh(new THREE.PlaneGeometry(.26,.26),new THREE.MeshBasicMaterial({map:t,transparent:true,side:THREE.DoubleSide}),pos,magnet);m.rotation.y=Math.PI/2;
  }
  // Field guides rotate with the magnetic rotor. Their shape is schematic.
- const fieldMat=new THREE.MeshBasicMaterial({color:0xbab073,transparent:true,opacity:.48});
+ const fieldMat=new THREE.MeshBasicMaterial({color:0xd2a238,transparent:true,opacity:0,depthWrite:false});fieldMaterials.push(fieldMat);
  for(let x0 of [-.65,0,.65])for(let side of [-1,1])pipe([[x0,.42,0],[x0,.48,side*.47],[x0,0,side*.59],[x0,-.48,side*.47],[x0,-.42,0]],.012,fieldMat,magnet);
  bearing(6.2,y,0,g);cylinder(.48,.48,.62,[6.55,y,0],cream,g);torus(.42,.028,[6.88,y,0],dark,g);
  const junction=box([.7,.6,.7],[4.7,2.55,1.0],cream,g);
- addLabel('generator','発電機','03',[4.65,4.93,.5]);
 }
 function buildCondenser(){
  const g=group('condenser'),x=-.25,y=.97,z=.65;
@@ -158,13 +172,12 @@ function buildCondenser(){
  // Feedwater pump: powered component returning condensate to the boiler.
  cylinder(.25,.25,.6,[-3.65,.64,2.15],dark,g);cylinder(.34,.34,.24,[-3.23,.64,2.15],water,g);box([1.15,.12,.65],[-3.65,.35,2.15],pale,g);
  for(let i=0;i<6;i++)torus(.255,.02,[-3.9+i*.09,.64,2.15],support,g);
- addLabel('condenser','復水器・ポンプ','04',[-.3,1.6,2.82]);
 }
 function buildPipesAndGrid(){
  // Closed working-fluid cycle: boiler -> turbine -> condenser -> pump -> boiler.
  flowPipe([[-4.6,5.4,-.1],[-3.8,5.7,-.1],[-3.25,5.55,-.1],[-3.08,4.05,-.1],[-2.65,3.65,0]],.14,hot,0xffe0a3,.11,'steam');
  for(let p of [[-3.43,5.67,-.1],[-3.08,4.55,-.1]])torus(.19,.044,p,steel,root,p[1]<5?'y':'x');
- flowPipe([[1.15,3.1,.25],[1.48,2.5,.4],[1.0,1.7,.65]],.27,hot,0xffd7a7,.11,'steam');
+ flowPipe([[1.15,3.1,.25],[1.48,2.5,.4],[1.0,1.7,.65]],.27,hot,0xffd7a7,.11,'steam-out');
  flowPipe([[-.8,.46,1.44],[-1.4,.5,2.2],[-3.25,.6,2.15],[-4.2,.65,2.15],[-5.0,.82,2.0],[-5.05,1.1,-1.5]],.12,water,0xb9e3ff,.11,'water');
  // Transformer and outgoing cable represent energy delivered to the external circuit.
  box([1.8,1.25,1.6],[8.0,1.12,.4],support);box([2.1,.23,1.9],[8,.42,.4],pale);
@@ -189,57 +202,162 @@ function buildBase(){
  // A small person provides scale without pretending the model is a measured engineering drawing.
  const person=new THREE.Group();person.position.set(6.4,.42,2.9);root.add(person);cylinder(.082,.082,.28,[0,.37,0],dark,person,'y',10);mesh(new THREE.SphereGeometry(.075,10,8),cream,[0,.58,0],person);for(let x of [-.046,.046])lineBetween([x,.04,0],[x,.25,0],.025,dark,person);for(let x of [-.11,.11])lineBetween([x,.21,0],[x*.7,.46,0],.022,dark,person);
 }
+
+const fireUniforms={uTime:{value:0},uBurn:{value:0}};
+function buildFire(parent){
+ const vertex=`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`;
+ const fragment=`
+ uniform float uTime;uniform float uBurn;uniform float uSeed;varying vec2 vUv;
+ float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+ float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+ float fbm(vec2 p){float a=.5,n=0.;for(int i=0;i<4;i++){n+=a*noise(p);p=p*2.03+vec2(7.1,3.3);a*=.5;}return n;}
+ void main(){
+ float y=vUv.y;float tm=uTime*1.6+uSeed*4.3;float x=(vUv.x-.5)*2.;
+ float wind=sin(y*6.5-tm*2.3+uSeed)*.13*y+(fbm(vec2(y*4.,tm*.5))-.5)*.36*y;
+ float n=fbm(vec2((x+uSeed)*3.8,y*5.5-tm*2.));
+ float width=pow(max(1.-y,0.),.78)*.79;
+ float body=width-abs(x+wind)+(n-.5)*(.17+y*.4);
+ float alpha=smoothstep(-.035,.11,body)*(1.-smoothstep(.76,1.,y+(n-.5)*.18))*smoothstep(0.,.045,y);
+ float core=clamp(body*1.9+(1.-y)*.22,0.,1.);
+ vec3 color=mix(vec3(.88,.075,.007),vec3(1.,.37,.015),smoothstep(.04,.35,core));
+ color=mix(color,vec3(1.,.83,.10),smoothstep(.30,.76,core));
+ color=mix(color,vec3(1.,.97,.71),smoothstep(.77,1.,core));
+ gl_FragColor=vec4(color,alpha*uBurn*.91);
+ #include <colorspace_fragment>
+ }`;
+ for(let i=0;i<13;i++){
+ const x=-7.15+(i%4)*.63+(i%2)*.045,z=-1.18+Math.floor(i/4)*.58;
+ const height=1.95+Math.sin(i*2.1)*.36,width=.96+Math.sin(i)*.13;
+ const material=new THREE.ShaderMaterial({vertexShader:vertex,fragmentShader:fragment,uniforms:{...fireUniforms,uSeed:{value:i*1.37}},transparent:true,depthWrite:false,side:THREE.DoubleSide,toneMapped:false});
+ const geo=new THREE.PlaneGeometry(width,height);geo.translate(0,height*.5,0);
+ const flame=mesh(geo,material,[x,1.025,z],parent);flame.castShadow=false;flame.receiveShadow=false;flame.renderOrder=3;flames.push(flame);
+ }
+ sparks=new THREE.InstancedMesh(new THREE.SphereGeometry(.021,5,4),new THREE.MeshBasicMaterial({color:0xffb446,toneMapped:false}),38);sparks.frustumCulled=false;parent.add(sparks);
+ fireLight=new THREE.PointLight(0xff8123,0,7);fireLight.position.set(-6.1,2.1,-.3);parent.add(fireLight);
+}
+function buildLoad(){
+ pipe([[8.9,.35,3.45],[8.9,2.65,3.45],[8.8,2.83,3.45],[8.3,2.83,3.45]],.045,dark);
+ cylinder(.2,.12,.13,[8.3,2.73,3.45],dark,root,'y');
+ loadBulb=mesh(new THREE.SphereGeometry(.13,16,12),new THREE.MeshStandardMaterial({color:0xe7e6ce,emissive:0xffba45,emissiveIntensity:0,roughness:.25}),[8.3,2.60,3.45]);
+ loadLight=new THREE.PointLight(0xffcf70,0,7);loadLight.position.set(8.3,2.5,3.45);root.add(loadLight);
+ flowPipe([[8.0,1.3,1.1],[8.15,.4,1.65],[8.9,.38,2.9],[8.9,.6,3.45],[8.9,2.64,3.45],[8.3,2.65,3.45]],.035,gold,0xffd658,.13,'load-electric');
+}
+
+const viewpoints={
+ overview:{target:[0,2.7,0],offset:[17,13.5,22]},
+ boiler:{target:[-6,3.1,-.2],offset:[7.0,4.2,10.0]},
+ turbine:{target:[-.5,3.2,0],offset:[5.7,4.25,8.4]},
+ generator:{target:[4.65,3.3,0],offset:[5.0,3.0,6.5]},
+ condenser:{target:[-.7,1.15,1.4],offset:[6.0,3.8,8.7]}
+};
+const tourNodes=[
+ {t:0,...viewpoints.overview},{t:1.8,...viewpoints.condenser},
+ {t:4.8,target:[-3.7,1.2,1.2],offset:[7,4.4,9]},
+ {t:7.6,...viewpoints.boiler},{t:10.6,target:[-5.9,3.8,-.1],offset:[7.7,4.6,10]},
+ {t:13.4,...viewpoints.turbine},{t:15.8,...viewpoints.turbine},
+ {t:18.5,...viewpoints.generator},{t:21.3,target:[6.3,2.6,1],offset:[8.3,5.0,10]},
+ {t:24.7,...viewpoints.condenser},{t:28.5,...viewpoints.overview},{t:30,...viewpoints.overview}
+];
+let cameraTween=null,lastTime=0;
+const dummy=new THREE.Object3D(),flowColor=new THREE.Color(),coldColor=new THREE.Color(0x3994e5),steamColor=new THREE.Color(0xffb65e);
+const lerpPoint=new THREE.Vector3(),travelTarget=new THREE.Vector3(),travelOffset=new THREE.Vector3();
+function fitOffset(offset,wide=false){
+ const aspect=camera.aspect;
+ if(aspect<1.1)offset.multiplyScalar(wide?Math.min(2.7,1.15/aspect):Math.min(1.65,.85/aspect));
+ return offset;
+}
 function init(){
- scene=new THREE.Scene();scene.background=new THREE.Color(0xe8eee8);scene.fog=new THREE.Fog(0xe8eee8,48,100);
- const wrap=$('#scene-wrap');camera=new THREE.PerspectiveCamera(35,wrap.clientWidth/wrap.clientHeight,.1,150);
- renderer=new THREE.WebGLRenderer({canvas:$('#scene'),antialias:true,alpha:false,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,1.7));renderer.setSize(wrap.clientWidth,wrap.clientHeight,false);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.92;
+ const wrap=$('#scene-wrap');scene=new THREE.Scene();scene.background=new THREE.Color(0xe8eee8);scene.fog=new THREE.Fog(0xe8eee8,65,145);
+ camera=new THREE.PerspectiveCamera(35,wrap.clientWidth/wrap.clientHeight,.1,190);
+ renderer=new THREE.WebGLRenderer({canvas:$('#scene'),antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,1.7));renderer.setSize(wrap.clientWidth,wrap.clientHeight,false);
+ renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.91;
  pmrem=new THREE.PMREMGenerator(renderer);environment=new RoomEnvironment();scene.environment=pmrem.fromScene(environment,.04).texture;scene.environmentIntensity=.6;
  scene.add(new THREE.HemisphereLight(0xffffff,0x91a887,1.6));const sun=new THREE.DirectionalLight(0xfff4dc,2.6);sun.position.set(-5,16,10);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-15,right:15,top:13,bottom:-13,near:1,far:55});sun.shadow.normalBias=.035;sun.shadow.bias=-.0002;scene.add(sun);
  const fill=new THREE.DirectionalLight(0xe4f4ff,1.1);fill.position.set(8,6,-7);scene.add(fill);
- const floor=mesh(new THREE.PlaneGeometry(250,250),new THREE.MeshStandardMaterial({color:0xe4ebe2,roughness:1}),[0,-.26,0],scene);floor.rotation.x=-Math.PI/2;floor.castShadow=false;
- root=new THREE.Group();scene.add(root);buildBase();buildBoiler();buildTurbine();buildGenerator();buildCondenser();buildPipesAndGrid();
- for(const [name,g] of Object.entries(parts)){g.traverse(o=>{if(o.isMesh){o.userData.part=name;pickables.push(o);}});}
- controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.085;controls.minDistance=4;controls.maxDistance=49;controls.maxPolarAngle=Math.PI*.475;controls.minPolarAngle=.12;controls.enablePan=true;controls.target.set(0,2.3,0);camera.position.set(18,15,23);controls.update();
+ const floor=mesh(new THREE.PlaneGeometry(300,300),new THREE.MeshStandardMaterial({color:0xe4ebe2,roughness:1}),[0,-.26,0],scene);floor.rotation.x=-Math.PI/2;floor.castShadow=false;
+ root=new THREE.Group();scene.add(root);buildBase();buildBoiler();buildTurbine();buildGenerator();buildCondenser();buildPipesAndGrid();buildLoad();
+ for(const [name,g] of Object.entries(parts))g.traverse(o=>{if(o.isMesh&&!(o.material instanceof THREE.ShaderMaterial)){o.userData.part=name;pickables.push(o);}});
+ controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.085;controls.minDistance=4;controls.maxDistance=110;controls.maxPolarAngle=Math.PI*.48;controls.minPolarAngle=.10;controls.enablePan=true;
  setCamera('overview',true);
- let previousWidth=wrap.clientWidth;new ResizeObserver(()=>{camera.aspect=wrap.clientWidth/wrap.clientHeight;camera.updateProjectionMatrix();renderer.setSize(wrap.clientWidth,wrap.clientHeight,false);if(Math.abs(previousWidth-wrap.clientWidth)>40){previousWidth=wrap.clientWidth;setCamera(state.step,true);}}).observe(wrap);
- controls.addEventListener('start',()=>{cameraTween=null;});
- const ray=new THREE.Raycaster();let down=null;$('#scene').addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});$('#scene').addEventListener('pointerup',e=>{if(!down||Math.hypot(e.clientX-down.x,e.clientY-down.y)>5)return;const rect=renderer.domElement.getBoundingClientRect();ray.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1),camera);const hit=ray.intersectObjects(pickables,false).find(h=>h.object.visible&&isHierarchyVisible(h.object));if(hit)selectStep(hit.object.userData.part);});
- $('#scene').addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','-','='].includes(e.key)){e.preventDefault();cameraTween=null;const off=camera.position.clone().sub(controls.target);const sph=new THREE.Spherical().setFromVector3(off);if(e.key==='ArrowLeft')sph.theta-=.12;if(e.key==='ArrowRight')sph.theta+=.12;if(e.key==='ArrowUp')sph.phi=Math.max(.2,sph.phi-.12);if(e.key==='ArrowDown')sph.phi=Math.min(1.48,sph.phi+.12);if(e.key==='+'||e.key==='=')sph.radius*=.88;if(e.key==='-')sph.radius*=1.12;camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(sph));controls.update();}});
- $('#loading').hidden=true;updateDetails();updatePlay();updateEnergy();requestAnimationFrame(animate);
+ let oldWidth=wrap.clientWidth,oldHeight=wrap.clientHeight;
+ new ResizeObserver(()=>{camera.aspect=wrap.clientWidth/wrap.clientHeight;camera.updateProjectionMatrix();renderer.setSize(wrap.clientWidth,wrap.clientHeight,false);if(Math.abs(oldWidth-wrap.clientWidth)>40||Math.abs(oldHeight-wrap.clientHeight)>80){oldWidth=wrap.clientWidth;oldHeight=wrap.clientHeight;if(state.follow&&state.started&&state.time<30)updateTourCamera();else setCamera(state.step,true);}}).observe(wrap);
+ controls.addEventListener('start',()=>setFollow(false));
+ const ray=new THREE.Raycaster();let down=null;
+ $('#scene').addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
+ $('#scene').addEventListener('pointerup',e=>{if(!down||Math.hypot(e.clientX-down.x,e.clientY-down.y)>5)return;const rect=renderer.domElement.getBoundingClientRect();ray.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1),camera);const hit=ray.intersectObjects(pickables,false).find(h=>isHierarchyVisible(h.object));if(hit){state.step=hit.object.userData.part;setCamera(state.step);}});
+ $('#scene').addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','-','='].includes(e.key)){e.preventDefault();setFollow(false);const sph=new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));if(e.key==='ArrowLeft')sph.theta-=.12;if(e.key==='ArrowRight')sph.theta+=.12;if(e.key==='ArrowUp')sph.phi=Math.max(.2,sph.phi-.12);if(e.key==='ArrowDown')sph.phi=Math.min(1.48,sph.phi+.12);if(e.key==='+'||e.key==='=')sph.radius*=.88;if(e.key==='-')sph.radius*=1.12;camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(sph));controls.update();}});
+ $('#loading').hidden=true;updateButtons();updateVisuals(0);requestAnimationFrame(animate);
 }
 function isHierarchyVisible(o){while(o){if(!o.visible)return false;o=o.parent;}return true;}
-let cameraTween=null;
-const viewpoints={overview:{target:[0,2.6,0],offset:[17,13.5,22]},boiler:{target:[-6,3.3,-.25],offset:[7.7,5.0,10.7]},turbine:{target:[-.6,3.15,0],offset:[5.7,4.25,7.2]},generator:{target:[4.65,3.3,0],offset:[4.8,2.9,5.0]},condenser:{target:[-.6,1.0,1.35],offset:[5.2,3.15,7.2]}};
-function setCamera(key,instant=false){if(!camera||!controls)return;const view=viewpoints[key];const target=v(view.target);const off=v(view.offset);const aspect=$('#scene-wrap').clientWidth/$('#scene-wrap').clientHeight;if(key==='overview'&&aspect<1.2)off.multiplyScalar(1.43);if(key==='overview'&&state.mode==='exploded')off.multiplyScalar(1.06);const pos=target.clone().add(off);if(instant||reduceMotion){controls.target.copy(target);camera.position.copy(pos);controls.update();cameraTween=null;}else cameraTween={from:camera.position.clone(),to:pos,fromTarget:controls.target.clone(),target,elapsed:0};}
-function selectStep(step){state.step=step;updateDetails();setCamera(step);if(innerWidth<=760&&$('#scene-wrap').getBoundingClientRect().top < -80)$('#scene-wrap').scrollIntoView({block:'start',behavior:reduceMotion?'instant':'smooth'});}
-function updateDetails(){const d=detail[state.step];$('#detail-content').innerHTML=`<h2>${d.title}</h2><p>${d.text}</p><div class="detail-tag">${d.tag}</div>`;$('#detail-note').textContent=d.note;$('#step-number').textContent=state.step==='overview'?'全体':`0${steps.indexOf(state.step)} / 04`;$('#induction').hidden=state.step!=='generator';$$('[data-step]').forEach(b=>{b.classList.toggle('active',b.dataset.step===state.step);b.setAttribute('aria-pressed',b.dataset.step===state.step);});labels.forEach(l=>l.el.classList.toggle('active',l.name===state.step));$('#look-inside').innerHTML=state.mode==='outside'?'内部をのぞいてみる <span>↗</span>':state.step==='overview'?'ボイラーから観察する <span>→</span>':'全体のつながりへ戻る <span>↗</span>';$('#view-name').textContent=state.step==='overview'?'発電所の全体像':({boiler:'ボイラーの観察',turbine:'タービンの観察',generator:'発電機の観察',condenser:'復水器の観察'}[state.step]);}
-function setMode(mode){state.mode=mode;$$('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',b.dataset.mode===mode);});updateDetails();if(mode==='exploded')setCamera(state.step);}
-function updatePlay(){$('#play-pause').textContent=state.playing?'Ⅱ':'▶';$('#play-pause').setAttribute('aria-label',state.playing?'アニメーションを一時停止':'アニメーションを再生');$('#play-label').textContent=state.playing?'アニメーション':'一時停止中';$('#scene-state').textContent=state.playing?'運転中':'観察のため一時停止';$('.live-dot').style.background=state.playing?'#5d906c':'#b99c52';}
-function updateEnergy(){const input=Math.round(state.heat*100),out=+(input*.4).toFixed(1),loss=+(input*.6).toFixed(1);$('#fuel-value').innerHTML=`${input}<span> %</span>`;$('#energy-in').textContent=input;$('#energy-out').textContent=out;$('#energy-loss').textContent=loss;$('#sankey-electric').style.strokeWidth=state.heat*52*.4;$('#sankey-heat').style.strokeWidth=state.heat*52*.6;}
-$$('[data-mode]').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));$$('[data-step]').forEach(b=>b.addEventListener('click',()=>selectStep(b.dataset.step)));
-$('#look-inside').addEventListener('click',()=>{if(state.mode==='outside')setMode('cutaway');else if(state.step==='overview')selectStep('boiler');else selectStep('overview');});
-$('#prev-step').addEventListener('click',()=>selectStep(steps[(steps.indexOf(state.step)+4)%5]));$('#next-step').addEventListener('click',()=>selectStep(steps[(steps.indexOf(state.step)+1)%5]));
-$('#play-pause').addEventListener('click',()=>{state.playing=!state.playing;updatePlay();});$('#speed').addEventListener('change',e=>{state.speed=Number(e.target.value);});$('#fuel').addEventListener('input',e=>{state.heat=Number(e.target.value)/100;updateEnergy();});$('#flow-toggle').addEventListener('change',e=>{state.flows=e.target.checked;});$('#reset-camera').addEventListener('click',()=>{selectStep('overview');});
-function zoom(factor){if(!camera||!controls)return;cameraTween=null;camera.position.sub(controls.target).multiplyScalar(factor).add(controls.target);controls.update();}$('#zoom-in').addEventListener('click',()=>zoom(.82));$('#zoom-out').addEventListener('click',()=>zoom(1.22));
-$('#fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else if($('#scene-wrap').requestFullscreen)await $('#scene-wrap').requestFullscreen();else $('#scene-wrap').scrollIntoView({block:'start',behavior:'smooth'});}catch{$('#scene-wrap').scrollIntoView({block:'start'});}});
-for(const [open,dialog] of [['about-open','about-dialog'],['reference-open','reference-dialog']]){$('#'+open).addEventListener('click',()=>$('#'+dialog).showModal());$('#'+dialog+' .dialog-close').addEventListener('click',()=>$('#'+dialog).close());$('#'+dialog).addEventListener('click',e=>{if(e.target===$('#'+dialog)){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.target.close();}});}
-const dummy=new THREE.Object3D(), flowColor=new THREE.Color(), coldColor=new THREE.Color(0x72b2e0), steamColor=new THREE.Color(0xffa45b);let lastTime=0;
-function animate(now){requestAnimationFrame(animate);const dt=Math.min((now-(lastTime||now))/1000,.05);lastTime=now;if(document.hidden)return;
- const moving=state.playing&&!$$('dialog[open]').length;
- if(moving){state.time+=dt*state.speed;state.phase+=dt*state.speed*.92;}
- if(cameraTween){cameraTween.elapsed+=dt;const t=Math.min(1,cameraTween.elapsed/1.05),k=1-Math.pow(1-t,3);camera.position.lerpVectors(cameraTween.from,cameraTween.to,k);controls.target.lerpVectors(cameraTween.fromTarget,cameraTween.target,k);if(t===1)cameraTween=null;}
- const target=state.mode==='outside'?0:state.mode==='cutaway'?1:2;state.cover=reduceMotion?target:THREE.MathUtils.damp(state.cover,target,5,dt);
- for(const c of covers){if(state.mode==='outside'&&state.cover<.015){c.obj.visible=true;c.obj.position.y=0;}else if(state.mode==='exploded'){c.obj.visible=!c.hideExploded;c.obj.position.y=c.amount*Math.max(0,state.cover-1);c.obj.rotation.z=0;}else{c.obj.visible=false;c.obj.position.y=0;}}
- for(const walls of boilerWalls){walls.visible=state.mode!=='cutaway';walls.position.y=state.mode==='exploded'?Math.max(0,state.cover-1)*2.1:0;walls.position.z=state.mode==='exploded'?Math.max(0,state.cover-1)*.8:0;walls.position.x=state.mode==='exploded'?-Math.max(0,state.cover-1)*2.8:0;}
- rotor.rotation.x=state.phase;magnet.rotation.x=state.phase;
- for(const item of flames){const f=.65+.35*Math.sin(state.time*8+item.offset);item.f.scale.y=(.45+state.heat*.65)*(1+f*.2);item.inner.scale.y=item.f.scale.y;item.f.rotation.y=state.time*.4+item.offset;}
- for(const s of flowSystems){s.inst.visible=state.flows;if((s.type==='internal'||s.type==='condensation'||s.type==='boiler'||s.type==='superheater'||s.type==='heat-transfer')&&state.mode==='outside')s.inst.visible=false;if(!s.inst.visible)continue;const density=['cooling','condensation','heat-transfer'].includes(s.type)?1:state.heat;for(let i=0;i<s.count;i++){const f=(i/s.count+state.time*s.speed*(s.type==='cooling'?1:.5+state.heat*.7))%1;dummy.position.copy(s.curve.getPointAt(f));const size=i/s.count<density?1:0;dummy.scale.setScalar(size*(s.type==='condensation'?(.45+.7*f):1));dummy.updateMatrix();s.inst.setMatrixAt(i,dummy.matrix);if(s.type==='boiler'){flowColor.copy(coldColor).lerp(steamColor,f);s.inst.setColorAt(i,flowColor);}if(s.type==='condensation'){flowColor.copy(steamColor).lerp(coldColor,Math.min(1,f*1.9));s.inst.setColorAt(i,flowColor);}}s.inst.instanceMatrix.needsUpdate=true;if(s.inst.instanceColor)s.inst.instanceColor.needsUpdate=true;}
- for(const m of flowMaterials){m.opacity=state.flows?.57:1;m.depthWrite=!state.flows;}
- // Internal magnetic field guides and pole colors are observable after opening the casing.
- controls.update();renderer.render(scene,camera);state.rendered=true;updateLabels();if(state.step==='generator')drawWave();
+function setCamera(key,instant=false){
+ if(!camera||!controls)return;const view=viewpoints[key],target=v(view.target),offset=fitOffset(v(view.offset),key==='overview');if(state.mode==='exploded')offset.multiplyScalar(1.09);const position=target.clone().add(offset);
+ if(instant||reduceMotion){controls.target.copy(target);camera.position.copy(position);controls.update();cameraTween=null;}
+ else cameraTween={from:camera.position.clone(),to:position,fromTarget:controls.target.clone(),target,elapsed:0};
 }
-function updateLabels(){const w=$('#scene-wrap').clientWidth,h=$('#scene-wrap').clientHeight;for(const l of labels){const p=l.pos.clone().project(camera);const x=(p.x+1)*w/2,y=(1-p.y)*h/2;const show=p.z<1&&p.z>-1&&x>28&&x<w-28&&y>70&&y<h-76&&(state.step==='overview'||state.step===l.name);l.el.style.opacity=show?1:0;l.el.style.pointerEvents=show?'auto':'none';l.el.tabIndex=show?0:-1;l.el.style.left=`${x}px`;l.el.style.top=`${y}px`;}}
-function drawWave(){const c=$('#wave'),ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle='#dce3ce';ctx.lineWidth=1;for(let y of [h*.2,h*.5,h*.8]){ctx.beginPath();ctx.moveTo(22,y);ctx.lineTo(w-15,y);ctx.stroke();}ctx.fillStyle='#8c987c';ctx.font='19px Arial';ctx.fillText('+',5,h*.24);ctx.fillText('−',5,h*.83);ctx.strokeStyle='#b89839';ctx.lineWidth=3;ctx.beginPath();for(let x=25;x<w-20;x++){const phase=state.phase-((w-20-x)/(w-45))*Math.PI*4;const y=h*.5-Math.sin(phase)*h*.34;if(x===25)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.stroke();ctx.fillStyle='#ca9b25';ctx.beginPath();ctx.arc(w-20,h*.5-Math.sin(state.phase)*h*.34,6,0,Math.PI*2);ctx.fill();}
-try{init();}catch(err){console.error(err);const loading=$('#loading');loading.hidden=false;loading.innerHTML='<strong>3D表示を開始できませんでした</strong><small>WebGL対応のChrome・Edge・Safariで開き直してください。</small><button class="primary-button" onclick="location.reload()">もう一度読み込む</button>';loading.style.padding='30px';}
-// A read-only diagnostics snapshot supports repeatable browser checks.
-window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,meshCount:pickables.length,drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray()})};
+function setFollow(value){state.follow=value;cameraTween=null;$('#follow').classList.toggle('active',value);$('#follow').setAttribute('aria-pressed',String(value));}
+function updateTourCamera(){
+ const t=Math.min(state.time,30);let i=0;while(i<tourNodes.length-2&&t>tourNodes[i+1].t)i++;
+ const a=tourNodes[i],b=tourNodes[i+1],f=ramp(t,a.t,b.t);
+ travelTarget.lerpVectors(v(a.target),v(b.target),f);
+ const offsetA=fitOffset(v(a.offset),a.t===0||a.t>=28.5),offsetB=fitOffset(v(b.offset),b.t===0||b.t>=28.5);
+ travelOffset.lerpVectors(offsetA,offsetB,f);
+ if(state.mode==='exploded')travelOffset.multiplyScalar(1.09);
+ controls.target.copy(travelTarget);camera.position.copy(travelTarget).add(travelOffset);
+}
+function setMode(mode){state.mode=mode;$$('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});if(!state.follow||!state.started)setCamera(state.step);}
+function updateButtons(){
+ $('#start span').textContent=state.started?'最初から':'スタート';$('#pause').disabled=!state.started;$('#timeline').disabled=!state.started;
+ $('#pause').innerHTML=state.playing?'<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>':'<svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></svg>';
+ $('#pause').setAttribute('aria-label',state.playing?'一時停止':'再開');$('#pause').title=state.playing?'一時停止':'再開';
+ $('#follow').classList.toggle('active',state.follow);$('#follow').setAttribute('aria-pressed',String(state.follow));
+}
+function start(){state.started=true;state.playing=true;state.time=0;state.phase=0;state.step='overview';state.stage='condenser';setFollow(!reduceMotion);setMode('cutaway');setCamera('overview',true);updateButtons();}
+function reset(){state.started=false;state.playing=false;state.time=0;state.phase=0;state.stage='idle';state.step='overview';setFollow(!reduceMotion);setCamera('overview',true);updateButtons();updateVisuals(0);}
+$('#start').addEventListener('click',start);$('#pause').addEventListener('click',()=>{state.playing=!state.playing;updateButtons();});$('#reset').addEventListener('click',reset);
+$('#speed').addEventListener('change',e=>{state.speed=Number(e.target.value);});$('#follow').addEventListener('click',()=>setFollow(!state.follow));
+$('#timeline').addEventListener('input',e=>{state.time=Number(e.target.value);updateVisuals(0);if(state.follow)updateTourCamera();});
+$$('[data-mode]').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
+$('#reset-camera').addEventListener('click',()=>{setFollow(false);state.step='overview';setCamera('overview');});
+function zoom(factor){if(!camera)return;setFollow(false);camera.position.sub(controls.target).multiplyScalar(factor).add(controls.target);controls.update();}
+$('#zoom-in').addEventListener('click',()=>zoom(.82));$('#zoom-out').addEventListener('click',()=>zoom(1.22));
+$('#fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else if($('#scene-wrap').requestFullscreen)await $('#scene-wrap').requestFullscreen();}catch{/* The model already fills the viewport on browsers without full-screen support. */}});
+function rotorPhase(t){const x=Math.max(0,t-12.7),duration=2.4;return 2.3*(x<duration?x*x*x/(duration*duration)-.5*x*x*x*x/(duration*duration*duration):x-duration*.5);}
+function updateVisuals(dt){
+ const t=state.started?state.time:0;
+ state.stage=state.started?stages.findLast(s=>t>=s.at).name:'idle';state.phase=state.started?rotorPhase(t):0;
+ rotor.rotation.x=state.phase;magnet.rotation.x=state.phase;
+ const target=state.mode==='outside'?0:state.mode==='cutaway'?1:2;state.cover=reduceMotion?target:THREE.MathUtils.damp(state.cover,target,5,dt);
+ for(const c of covers){c.obj.visible=state.mode==='outside'||(state.mode==='exploded'&&!c.hideExploded);c.obj.position.y=state.mode==='exploded'?c.amount*Math.max(0,state.cover-1):0;}
+ for(const walls of boilerWalls){walls.visible=state.mode!=='cutaway';const f=state.mode==='exploded'?Math.max(0,state.cover-1):0;walls.position.set(-f*2.8,f*2.1,f*.8);}
+ const burn=state.started?ramp(t,5.8,7.3):0;fireUniforms.uTime.value=t;fireUniforms.uBurn.value=burn;
+ for(const flame of flames){flame.visible=burn>.001;flame.rotation.y=Math.atan2(camera.position.x-flame.position.x,camera.position.z-flame.position.z);flame.scale.y=.6+.4*burn;}
+ fireLight.intensity=burn*48*(.91+.09*Math.sin(t*16)*Math.sin(t*7.3));sparks.visible=burn>.001;
+ for(let i=0;i<sparks.count&&burn>.001;i++){const life=(t*(.21+(i%5)*.015)+i*.137)%1;dummy.position.set(-7.12+(i%7)*.34+Math.sin(t*2+i)*.1*life,1.14+life*2.9,-1.12+(i%4)*.44+Math.sin(i+t)*.08);dummy.quaternion.identity();dummy.scale.setScalar((1-life)*burn);dummy.updateMatrix();sparks.setMatrixAt(i,dummy.matrix);}sparks.instanceMatrix.needsUpdate=true;
+ for(const s of flowSystems){
+ const elapsed=state.started?t-s.start:-1;s.inst.visible=elapsed>=0;
+ if(['internal','condensation','boiler','superheater','heat-transfer'].includes(s.type)&&state.mode==='outside')s.inst.visible=false;
+ s.visibleCount=0;if(!s.inst.visible)continue;
+ for(let i=0;i<s.count;i++){
+ const u=elapsed*s.velocity/s.length-(i+Math.sin(i*4.13)*.15)/s.count,f=((u%1)+1)%1,active=u>=0;
+ const slot=f*600,low=Math.floor(slot),high=Math.min(low+1,600);lerpPoint.lerpVectors(s.samples[low],s.samples[high],slot-low);dummy.position.copy(lerpPoint);
+ if(s.fast)dummy.quaternion.copy(s.rotations[low]);else dummy.quaternion.identity();
+ const size=active?1:0;dummy.scale.setScalar(size*(s.type==='condensation'?(.5+.65*f):1));dummy.updateMatrix();s.inst.setMatrixAt(i,dummy.matrix);if(active)s.visibleCount++;
+ if(s.type==='boiler'){flowColor.copy(coldColor).lerp(steamColor,ramp(f,.15,.85)*burn);s.inst.setColorAt(i,flowColor);}
+ if(s.type==='condensation'){flowColor.copy(steamColor).lerp(coldColor,Math.min(1,f*2.5));s.inst.setColorAt(i,flowColor);}
+ }
+ s.inst.instanceMatrix.needsUpdate=true;if(s.inst.instanceColor)s.inst.instanceColor.needsUpdate=true;
+ }
+ const power=state.started?ramp(t,13.1,15.0):0;
+ for(const mat of fieldMaterials)mat.opacity=power*(.22+.42*Math.abs(Math.sin(state.phase)));
+ const light=state.started?ramp(t,16.4,17.2):0;loadBulb.material.emissiveIntensity=light*4;loadLight.intensity=light*25;
+ $('#timeline').value=Math.min(30,t);$('#timeline').style.setProperty('--progress',`${Math.min(t/30,1)*100}%`);
+}
+function animate(now){
+ requestAnimationFrame(animate);const dt=Math.min((now-(lastTime||now))/1000,.05);lastTime=now;if(document.hidden)return;
+ if(state.playing)state.time+=dt*state.speed;
+ if(state.follow&&state.started&&state.time<=30)updateTourCamera();
+ else if(cameraTween){cameraTween.elapsed+=dt;const f=ramp(cameraTween.elapsed,0,1.1);camera.position.lerpVectors(cameraTween.from,cameraTween.to,f);controls.target.lerpVectors(cameraTween.fromTarget,cameraTween.target,f);if(f===1)cameraTween=null;}
+ updateVisuals(dt);controls.update();renderer.render(scene,camera);state.rendered=true;
+}
+try{init();}catch(err){console.error(err);$('#loading').hidden=false;$('#loading').className='error';$('#loading').innerHTML='<div>3Dを表示できませんでした。</div><button onclick="location.reload()">再読み込み</button>';$$('button,select,input').forEach(b=>{if(!b.closest('#loading'))b.disabled=true;});}
+window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};

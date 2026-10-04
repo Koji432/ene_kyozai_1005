@@ -1,27 +1,37 @@
 <!doctype html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#edf0e9"><meta name="description" content="火力発電の内部を3Dで探検。熱が蒸気を生み、タービンを回し、発電機で電気に変わるまでをアニメーションで観察する教材。">
-<title>火力発電を、内側から。 | ENERGY LAB</title>
-<link rel="icon" href="./assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css">
-<script defer src="./app.bundle.js"></script>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#e8eee8">
+<title>火力発電 3D</title>
+<link rel="icon" href="./assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css?v=2">
+<script defer src="./app.bundle.js?v=2"></script>
 </head>
 <body>
-<header class="site-header"><a class="brand" href="./" aria-label="ENERGY LAB ホーム"><svg viewBox="0 0 34 34" aria-hidden="true"><path d="M6 25V15l7 5V7l7 6V3l8 6v16"/><path d="M6 30h22"/></svg><span>ENERGY LAB<small>見えないしくみを、見にいこう。</small></span></a><div class="header-right"><span class="tag">中学理科 · エネルギー</span><button id="about-open" class="text-button">教材について <span>↗</span></button></div></header>
-<main>
-<section class="intro"><div><p class="eyebrow">01 / THERMAL POWER</p><h1>火力発電を、<span>内側から。</span></h1></div><p class="intro-copy">火の熱が、どうやって電気になる？<br>発電所の中をのぞいて、エネルギーの旅を追いかけよう。</p></section>
-<section class="lab" aria-label="火力発電の3D実験室">
-<div class="lab-toolbar"><div class="view-tabs" role="group" aria-label="モデルの表示方法"><button data-mode="outside" class="active" aria-pressed="true"><span class="tab-icon">◈</span> 外観</button><button data-mode="cutaway" aria-pressed="false"><span class="tab-icon">◩</span> 内部を見る</button><button data-mode="exploded" aria-pressed="false"><span class="tab-icon">▱</span> 分解する</button></div><div class="toolbar-right"><label class="switch-label"><input type="checkbox" id="flow-toggle" checked><span class="switch"></span>流れを表示</label><button id="reset-camera" class="icon-button" title="視点を全体に戻す" aria-label="視点を全体に戻す">↺</button><button id="fullscreen" class="icon-button" title="3D画面を全画面表示" aria-label="3D画面を全画面表示">⛶</button></div></div>
-<div class="lab-body"><div class="scene-wrap" id="scene-wrap"><canvas id="scene" aria-label="火力発電所の3Dモデル。ドラッグで回転、ホイールまたはピンチで拡大。下の設備ボタンでも選択できます。" tabindex="0"></canvas><div id="loading" class="loading"><div class="loading-ring"></div><strong>発電所を準備しています</strong><small>3Dモデルを読み込み中</small></div><div class="scene-heading"><span class="live-dot"></span><span id="scene-state">運転中</span><span class="divider">/</span><span id="view-name">発電所の全体像</span></div><div id="model-labels" class="model-labels"></div><div class="scene-scale"><span class="scale-line"></span>しくみを観察するための学習用3Dモデル</div><div class="scene-help"><span>↔</span> ドラッグで回転 <span>⌕</span> スクロールで拡大</div><div class="legend"><span><i class="hot"></i>熱・蒸気</span><span><i class="water"></i>循環する水</span><span><i class="cool"></i>冷却水</span><span><i class="electric"></i>電気</span></div><div class="camera-controls"><button id="zoom-in" aria-label="拡大">＋</button><button id="zoom-out" aria-label="縮小">−</button></div></div>
-<aside class="observation" aria-label="選択した設備の解説"><div class="panel-top"><span class="eyebrow">OBSERVATION</span><span id="step-number">全体</span></div><div id="detail-content" aria-live="polite"></div><div id="induction" hidden><div class="wave-heading"><span>コイルに生じる電圧</span><span>交流</span></div><canvas id="wave" width="540" height="180" aria-label="磁石の回転に合わせて、電圧が正負に交互に変わる波形"></canvas><div class="wave-caption">＋ と − が交互に入れ替わる</div></div><div class="panel-action"><button id="look-inside" class="primary-button">内部をのぞいてみる <span>↗</span></button></div><div class="fact"><span class="fact-icon">i</span><p id="detail-note">エネルギーはゼロから生まれるのではなく、形を変えて受け渡されます。</p></div><div class="next-actions"><button id="prev-step" aria-label="前の設備">←</button><span>設備を順番に観察</span><button id="next-step" aria-label="次の設備">→</button></div></aside></div>
-<div class="transport"><div class="playback"><button id="play-pause" class="play-button" aria-label="アニメーションを一時停止">Ⅱ</button><span id="play-label">アニメーション</span><select id="speed" aria-label="アニメーションの速さ"><option value="0.25">0.25 ×</option><option value="0.5">0.5 ×</option><option value="1" selected>1 ×</option></select></div><div class="fuel-control"><label for="fuel">熱の投入量</label><input id="fuel" type="range" min="20" max="100" value="70" step="1"><output id="fuel-value" for="fuel">70<span> %</span></output></div><span class="transport-note">動きは観察用のスローモーション</span></div>
-</section>
-<section class="journey"><div class="section-label"><p class="eyebrow">FOLLOW THE ENERGY</p><h2>熱から、回転へ。回転から、電気へ。</h2><p>設備を選ぶと、そこに近づいて観察できます。</p></div><div class="journey-path" aria-label="設備を選択"><button data-step="boiler"><span class="step-index">01</span><span class="step-symbol flame">♨</span><span><strong>ボイラー</strong><small>燃料の化学エネルギー → 熱</small></span><span class="path-arrow">→</span></button><button data-step="turbine"><span class="step-index">02</span><span class="step-symbol turbine">✺</span><span><strong>タービン</strong><small>蒸気のエネルギー → 回転</small></span><span class="path-arrow">→</span></button><button data-step="generator"><span class="step-index">03</span><span class="step-symbol generator">ϟ</span><span><strong>発電機</strong><small>回転のエネルギー → 電気</small></span></button><button data-step="condenser" class="return-step"><span class="step-index">04</span><span class="step-symbol condenser">↻</span><span><strong>復水器・ポンプ</strong><small>蒸気を水に戻し、もう一度</small></span></button></div></section>
-<section class="energy-section"><div class="energy-copy"><p class="eyebrow">ENERGY BALANCE</p><h2>すべての熱が、<br>電気になるわけではない。</h2><p>蒸気を冷やすときの熱などは、周囲へ出ていきます。<br>熱の投入量を変えて、流れの太さを比べてみよう。</p></div><div class="energy-diagram"><div class="balance-labels"><span>燃料のエネルギー <b id="energy-in">70</b></span><span class="balance-electric">電気 <b id="energy-out">28</b></span></div><svg id="sankey" viewBox="0 0 600 160" role="img" aria-label="投入エネルギーの40パーセントを電気、60パーセントを周囲へ出る熱として示す模式図"><path id="sankey-heat" d="M0 45 C210 45 230 125 420 125 L580 125"/><path id="sankey-electric" d="M0 45 C250 45 260 30 440 30 L580 30"/><circle cx="588" cy="30" r="4" fill="#d5a522"/><circle cx="588" cy="125" r="4" fill="#cf825d"/></svg><div class="balance-bottom"><span>投入量に対する相対値</span><span>周囲へ出る熱など <b id="energy-loss">42</b></span></div><p class="model-note">説明用に発電効率を40%で固定。実際の効率は設備・運転条件によって異なります。</p></div></section>
-<footer><span class="footer-brand">ENERGY LAB <span>/</span> ene_kyozai_1005</span><p>観察する。つながりが見える。</p><button id="reference-open" class="text-button">参考写真としくみ図 ↗</button></footer>
+<main id="scene-wrap">
+<canvas id="scene" tabindex="0" aria-label="火力発電の3Dモデル。ドラッグで回転、ピンチまたはホイールで拡大縮小。矢印キーとプラス・マイナスキーでも操作できます。"></canvas>
+<div id="loading" role="status" aria-label="3Dモデルを読み込んでいます"><span></span></div>
+<nav class="view-controls glass" aria-label="表示方法">
+<button data-mode="outside" aria-pressed="false">外観</button>
+<button data-mode="cutaway" class="active" aria-pressed="true">内部</button>
+<button data-mode="exploded" aria-pressed="false">分解</button>
+</nav>
+<div class="camera-controls glass">
+<button id="reset-camera" title="全体を見る" aria-label="全体を見る"><svg viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M8 12h8m-4-4v8"/></svg></button>
+<button id="zoom-in" title="拡大" aria-label="拡大"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+<button id="zoom-out" title="縮小" aria-label="縮小"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+<button id="fullscreen" title="全画面" aria-label="全画面"><svg viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+</div>
+<div class="playback glass" aria-label="アニメーション操作">
+<div class="playback-row">
+<button id="start" class="start"><svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></svg><span>スタート</span></button>
+<button id="pause" class="square" disabled aria-label="一時停止" title="一時停止"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
+<span class="control-divider"></span>
+<select id="speed" aria-label="再生速度" title="再生速度"><option value="0.5">0.5 ×</option><option value="1" selected>1 ×</option><option value="2">2 ×</option></select>
+<button id="follow" class="square active" aria-pressed="true" aria-label="流れにカメラを追従" title="流れにカメラを追従"><svg viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></svg></button>
+<button id="reset" class="square" aria-label="最初の停止状態に戻す" title="最初の停止状態に戻す"><svg viewBox="0 0 24 24"><path d="M5 9a8 8 0 1 1 0 7M5 4v5h5"/></svg></button>
+</div>
+<input id="timeline" type="range" min="0" max="30" value="0" step="0.01" aria-label="アニメーションの位置" disabled>
+</div>
 </main>
-<dialog id="about-dialog"><button class="dialog-close" aria-label="閉じる">×</button><p class="eyebrow">ABOUT THIS MODEL</p><h2>しくみを正確に、動きを見やすく。</h2><p>ボイラーを使う<strong>汽力発電</strong>を表した、中学生向けの3D教材です。提供されたタービン建屋の写真としくみ図を参考に、設備の形を再構成しています。実設備のCAD・計測モデルではありません。</p><ul><li>タービンと発電機は同じ軸でつながり、一緒に回転します。固定羽根は回りません。</li><li>発電機では回転する磁極によって固定コイルを貫く磁束が変わり、交流の電圧が生じます。実際の大型発電機の磁石は電磁石です。</li><li>主系統の水・蒸気と、復水器を冷やす冷却水は別の経路を通り、混ざりません。給水ポンプには電力が必要です。</li><li>色や動く粒は、熱・流体・電気エネルギーの伝わり方を示す目印です。実際の水蒸気は無色透明で、黄色い粒は電子の動きを表しません。</li><li>観察のため回転を遅く表示し、蒸気の流れと波形も時間を引き延ばしています。熱の投入量は定常運転を比べる模式操作です。電力系統につないだ同期発電機の回転数は一定として表現しています。</li><li>高圧・低圧タービンの段構成、配管、再熱・給水加熱系、排ガス処理や送電設備の細部は簡略化しています。熱収支は投入100に対し電気40・周囲への熱など60という説明用の例です。</li></ul><h3>学習内容の参考</h3><p class="source-links"><a href="https://www.fepc.or.jp/supply/hatsuden/fire/" target="_blank" rel="noopener">電気事業連合会：火力発電 ↗</a><a href="https://www.fepc.or.jp/sp/pikaru/basic.html" target="_blank" rel="noopener">電気事業連合会：発電のしくみ ↗</a><a href="https://www.tepco.co.jp/shiryokan/school/pdf/work_01.pdf" target="_blank" rel="noopener">東京電力：発電機のしくみ ↗</a></p><p class="small">マウス・タッチ操作のほか、3D画面にフォーカスして矢印キーで回転、＋／−で拡大縮小できます。設備の選択は下のボタンからも行えます。</p></dialog>
-<dialog id="reference-dialog"><button class="dialog-close" aria-label="閉じる">×</button><p class="eyebrow">FROM REAL TO MODEL</p><h2>実際の設備と、しくみをつなぐ。</h2><p>提供資料を参考に、円筒形のタービン・発電機、床下の復水器、架台・配管を3Dで表現しました。</p><div class="reference-grid"><figure><img src="./assets/plant-reference.jpg" alt="提供された実際のタービン建屋の写真。大型の回転機器が軸に沿って並んでいる。"><figcaption>実際のタービン・発電機の外観（提供写真）</figcaption></figure><figure><img src="./assets/cycle-reference.gif" alt="ボイラー、タービン、発電機、復水器を通る水と蒸気の循環を示す提供図"><figcaption>水と蒸気が循環する基本構造（提供図）</figcaption></figure></div></dialog>
-<noscript><div class="noscript">3D教材を使うには、ブラウザーのJavaScriptを有効にしてください。</div></noscript>
+<noscript><p>JavaScriptを有効にしてください。</p></noscript>
 </body></html>
