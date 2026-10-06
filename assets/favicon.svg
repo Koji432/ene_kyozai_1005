@@ -1,1 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#1c4b40"/><path d="M24 5 11 23h9l-4 12 14-19h-9z" fill="#e8d87c"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
+  <!-- 白色の背景 -->
+  <rect width="40" height="40" rx="10" fill="#ffffff" />
+  
+  <!-- 赤色の本のアイコン -->
+  <path d="M 8,11.5 C 8,10.5 9,10 10.5,10.5 L 18.5,13.5 C 19.5,14 20,14.5 20,15.5 L 20,30.5 C 20,29.5 19,29 17.5,28.5 L 9.5,25.5 C 8.5,25 8,24 8,23 Z" fill="#c00000" />
+  <path d="M 32,11.5 C 32,10.5 31,10 29.5,10.5 L 21.5,13.5 C 20.5,14 20,14.5 20,15.5 L 20,30.5 C 20,29.5 21,29 22.5,28.5 L 30.5,25.5 C 31.5,25 32,24 32,23 Z" fill="#c00000" />
+  
+  <!-- ページ表現（白いライン） -->
+  <path d="M 11,15 Q 15,13.5 18,16" stroke="#ffffff" stroke-width="1" fill="none" stroke-linecap="round" />
+  <path d="M 29,15 Q 25,13.5 22,16" stroke="#ffffff" stroke-width="1" fill="none" stroke-linecap="round" />
+</svg>
