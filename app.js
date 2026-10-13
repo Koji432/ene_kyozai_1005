@@ -5,20 +5,25 @@ import { RoomEnvironment } from './vendor/RoomEnvironment.js';
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const state = { mode:'cutaway', step:'overview', started:false, playing:false, follow:!reduceMotion, speed:1, time:0, phase:0, cover:1, rendered:false, stage:'idle' };
-let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment,fireLight,sparks,loadLight,loadBulb;
+const state = { mode:'cutaway', step:'overview', started:false, playing:false, follow:!reduceMotion, speed:1, time:0, phase:0, rendered:false, stage:'idle' };
+let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment,fireLight,sparks,loadLight,loadBulb,loadFilament,loadHalo,loadPool,boilerBubbles,drumLiquid,generatorCoils;
 const flowMaterials=[],covers=[],boilerWalls=[],flowSystems=[],flames=[],pickables=[],parts={},fieldMaterials=[];
+const electricalCircuits=[],heaterMaterials=[];
+const DURATION=32, LAMP_ON=26.2;
+const heatUniforms={uHeat:{value:0}};
+const lampUniforms={uLight:{value:0}};
 const stages = [
  {at:0,name:'condenser'}, {at:1,name:'feedwater'}, {at:5.8,name:'boiler'},
  {at:9.6,name:'superheater'}, {at:11.6,name:'steam'}, {at:12.7,name:'turbine'},
- {at:17,name:'generator'}, {at:22,name:'return'}, {at:27,name:'overview'}, {at:30,name:'complete'}
+ {at:17,name:'generator'}, {at:20,name:'transmission'}, {at:24,name:'load'}, {at:26.2,name:'light'}, {at:32,name:'complete'}
 ];
 const timings = {
  water:{start:1,velocity:1.65},boiler:{start:5.8,velocity:1.1},
  superheater:{start:9.6,velocity:6.5},steam:{start:11.6,velocity:10.5},
  internal:{start:12.25,velocity:9},'steam-out':{start:13,velocity:3.5},
  condensation:{start:14.8,velocity:.8},'heat-transfer':{start:14.8,velocity:.6},
- electric:{start:13.1,velocity:5.4},'load-electric':{start:15.2,velocity:4.4},
+ electric:{start:13.4,velocity:4.4},transmission:{start:20,velocity:5.4},'load-electric':{start:25,velocity:5.4},
+ 'heat-in':{start:6,velocity:1.4},downcomer:{start:5.4,velocity:.8},
  cooling:{start:.35,velocity:1.1},exhaust:{start:5.8,velocity:1.4}
 };
 const clamp=THREE.MathUtils.clamp;
@@ -42,8 +47,8 @@ function torus(r,t,pos,mat=steel,parent=root,axis='x'){const m=mesh(new THREE.To
 function pipe(points,r,mat,parent=root,rounded=true){const curve=rounded?new THREE.CatmullRomCurve3(points.map(v),false,'centripetal'):new THREE.CurvePath();if(!rounded) for(let i=0;i<points.length-1;i++)curve.add(new THREE.LineCurve3(v(points[i]),v(points[i+1])));const m=mesh(new THREE.TubeGeometry(curve,Math.max(24,points.length*12),r,10,false),mat,[0,0,0],parent);return {mesh:m,curve};}
 function lineBetween(a,b,r,mat,parent=root){const delta=v(b).sub(v(a)),m=cylinder(r,r,delta.length(),v(a).add(v(b)).multiplyScalar(.5).toArray(),mat,parent,'y',10);m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize());return m;}
 function flow(curve,color,count=28,speed=.12,type='fluid',radius=.075){
- const fast=['steam','internal','superheater'].includes(type);
- if(fast)count=type==='steam'?13:type==='internal'?18:20;
+ const fast=['steam','internal','superheater','heat-in'].includes(type);
+ if(fast&&type!=='heat-in')count=type==='steam'?13:type==='internal'?18:20;
  if(type==='steam-out'){count=12;radius*=.55;}
  if(type==='steam')color=0xffc451;
  const g=fast?new THREE.ConeGeometry(radius*.65,radius*3.5,6):new THREE.SphereGeometry(radius,7,5);
@@ -59,6 +64,55 @@ function group(name){const g=new THREE.Group();g.userData.part=name;root.add(g);
 function bolts(x,r,y,z,parent){for(let i=0;i<12;i++){const a=i/12*Math.PI*2;cylinder(.042,.042,.11,[x,y+Math.cos(a)*r,z+Math.sin(a)*r],steel,parent,'x',6);}}
 function bearing(x,y,z,parent){box([.32,.48,.65],[x,y-.6,z],cream,parent);cylinder(.29,.29,.38,[x,y,z],cream,parent);torus(.23,.04,[x+.2,y,z],dark,parent);}
 function shellHalf(x,y,z,r1,r2,len,mat,parent,upper){const g=new THREE.CylinderGeometry(r1,r2,len,56,1,true,upper?Math.PI:0,Math.PI);const m=mesh(g,mat,[x,y,z],parent);m.rotation.z=-Math.PI/2;return m;}
+function buildBoilerWater(parent){
+ const tubeShader=new THREE.ShaderMaterial({
+  uniforms:heatUniforms,transparent:true,depthWrite:false,side:THREE.DoubleSide,
+  vertexShader:`varying float h;void main(){h=uv.y;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+  fragmentShader:`uniform float uHeat;varying float h;
+   void main(){float warm=smoothstep(.02,.7,uHeat-h*.24);
+   vec3 color=mix(vec3(.12,.48,.86),vec3(1.,.52,.12),warm);
+   float vapour=smoothstep(.58,1.,h)*smoothstep(.55,1.,uHeat);
+   gl_FragColor=vec4(mix(color,vec3(1.,.88,.54),vapour),.75-vapour*.42);
+   #include <colorspace_fragment>
+   }`
+ });
+ for(let j=0;j<6;j++){
+  const x=-7.28+j*.43;
+  const jacket=water.clone();jacket.transparent=true;jacket.opacity=.19;jacket.depthWrite=false;
+  cylinder(.145,.145,4.15,[x,3.175,-1.5],jacket,parent,'y',20);heaterMaterials.push(jacket);
+  cylinder(.117,.117,4.12,[x,3.175,-1.5],tubeShader,parent,'y',20);
+  // Fluid markers rise through the tube; radiative heat markers stop outside its wall.
+  flow(new THREE.LineCurve3(v([x,1.1,-1.5]),v([x,5.25,-1.5])),0xcdefff,13,.1,'boiler',.048);
+  for(let y of [1.6,2.3,3.0]){
+   flow(new THREE.CatmullRomCurve3([[x,y-.18,-.56],[x,y,-.94],[x,y+.05,-1.32]].map(v)),0xffaa36,4,.1,'heat-in',.047);
+  }
+ }
+ flowPipe([[-5.05,1.1,-1.5],[-6.3,1.1,-1.5],[-7.4,1.1,-1.5]],.17,water,0x9ad7ff,.11,'downcomer');
+ flowPipe([[-7.36,5.33,-1.4],[-7.52,5.1,-1.73],[-7.52,1.38,-1.73],[-7.35,1.1,-1.5]],.12,water,0x9ad7ff,.11,'downcomer');
+ const drumGlass=new THREE.MeshStandardMaterial({color:0x9fb8be,transparent:true,opacity:.16,metalness:.18,roughness:.22,side:THREE.DoubleSide,depthWrite:false});
+ cylinder(.48,.48,3.15,[-6.05,5.45,-1.4],drumGlass,parent);
+ for(const xx of [-7.65,-4.45]){torus(.48,.043,[xx,5.45,-1.4],steel,parent);bolts(xx,.42,5.45,-1.4,parent);}
+ drumLiquid=new THREE.MeshStandardMaterial({color:0x3994e5,transparent:true,opacity:.73,roughness:.3,side:THREE.DoubleSide});
+ const lowerWater=mesh(new THREE.CylinderGeometry(.415,.415,3.06,40,1,false,0,Math.PI),drumLiquid,[-6.05,5.45,-1.4],parent);lowerWater.rotation.z=-Math.PI/2;
+ const surface=mesh(new THREE.PlaneGeometry(3.06,.83),drumLiquid,[-6.05,5.45,-1.4],parent);surface.rotation.x=-Math.PI/2;
+ const drumCover=new THREE.Group();parent.add(drumCover);cylinder(.485,.485,3.17,[-6.05,5.45,-1.4],dark,drumCover);covers.push({obj:drumCover,part:'boiler'});
+ boilerBubbles=new THREE.InstancedMesh(new THREE.SphereGeometry(.046,8,6),new THREE.MeshStandardMaterial({color:0xffefbd,emissive:0xffb32c,emissiveIntensity:.38,transparent:true,opacity:.84,roughness:.15}),90);boilerBubbles.frustumCulled=false;parent.add(boilerBubbles);
+}
+function updateBoilerWater(t){
+ const heat=state.started?ramp(t,6.2,9.6):0;heatUniforms.uHeat.value=heat;
+ for(const mat of heaterMaterials)mat.color.copy(coldColor).lerp(steamColor,heat);
+ drumLiquid.color.copy(coldColor).lerp(steamColor,heat*.85);
+ boilerBubbles.visible=state.mode==='cutaway'&&heat>.16;
+ if(!boilerBubbles.visible)return;
+ for(let i=0;i<boilerBubbles.count;i++){
+  const tube=i%6,life=(Math.max(0,t-6.6)*(.24+(i%4)*.015)+i*.137)%1;
+  if(i<72)dummy.position.set(-7.28+tube*.43+Math.sin(i*3.5+t)*.027,1.18+life*4.1,-1.5+Math.cos(i*1.7+t)*.03);
+  else dummy.position.set(-7.4+(i-72)*.157,5.17+life*.60,-1.4+Math.sin(i)*.13);
+  dummy.quaternion.identity();dummy.scale.setScalar(heat*(.38+life*1.58));dummy.updateMatrix();boilerBubbles.setMatrixAt(i,dummy.matrix);
+ }
+ boilerBubbles.instanceMatrix.needsUpdate=true;
+}
+
 function buildBoiler(){
  const g=group('boiler');
  box([3.5,.4,3.7],[-6.1,.43,-.4],pale,g);
@@ -70,13 +124,11 @@ function buildBoiler(){
  box([3.3,.18,3.35],[-6.1,5.88,-.4],cream,walls);
  for(let y=1;y<6;y+=1.25){lineBetween([-7.8,y,1.26],[-4.45,y,1.26],.047,support,walls);lineBetween([-4.45,y,-2.0],[-4.45,y,1.26],.047,support,walls);}
  for(const x of [-7.82,-4.39])for(const z of [-2.08,1.35]){box([.13,6.0,.13],[x,3.1,z],support,g);}
- // Parallel water-wall tubes absorb heat from combustion. The steam path continues above.
- for(let j=0;j<6;j++){let x=-7.28+j*.43;flowPipe([[x,1.1,-1.5],[x,3.5,-1.5],[x,5.25,-1.5]],.075,hot,0xffd59a,.11,'boiler');}
- pipe([[-7.4,1.1,-1.5],[-6.3,1.1,-1.5],[-4.7,1.1,-1.5]],.16,water,g);
- cylinder(.3,.3,2.85,[-6.05,5.42,-1.4],dark,g);
+ // A drum boiler: water descends outside the furnace, rises and boils in heated water-wall tubes.
+ buildBoilerWater(g);
  const coils=[[-7.35,4.55,.62],[-4.95,4.55,.62],[-4.8,4.8,.4],[-7.35,4.8,.4],[-7.45,5.03,.1],[-4.7,5.03,.1],[-4.6,5.4,-.1]];
  flowPipe(coils,.083,hot,0xffddb1,.12,'superheater');
- flowPipe([[-7.3,5.42,-1.4],[-7.4,5.1,-.8],[-7.35,4.55,.62]],.09,hot,0xffddb1,.12,'superheater');
+ flowPipe([[-7.3,5.82,-1.4],[-7.4,5.3,-.8],[-7.35,4.55,.62]],.09,hot,0xffddb1,.12,'superheater');
  const grate=box([2.7,.14,2.5],[-6.1,.91,-.4],dark,g);
  for(let i=0;i<12;i++)box([.10,.08,2.25],[-7.27+i*.21,1.02,-.4],steel,g);
  buildFire(g);
@@ -98,7 +150,7 @@ function buildTurbine(){
  const casingMat=cream.clone();casingMat.side=THREE.DoubleSide;
  shellHalf(-.6,y,0,1.13,.62,4.15,casingMat,g,false);
  const cover=new THREE.Group();g.add(cover);shellHalf(-.6,y,0,1.13,.62,4.15,casingMat,cover,true);
- covers.push({obj:cover,amount:2.9,part:'turbine'});
+ covers.push({obj:cover,part:'turbine'});
  for(let i=0;i<7;i++){const x=-2.58+i*.66,r=.65+i*.082;
  for(let upper of [false,true]){const arc=mesh(new THREE.TorusGeometry(r,.045,7,36,Math.PI),dark,[x,y,0],upper?cover:g);if(!upper)arc.geometry.rotateX(Math.PI);arc.rotation.y=Math.PI/2;}
  }
@@ -127,10 +179,11 @@ function buildGenerator(){
  const g=group('generator'),x=4.5,y=3.35;
  box([3.2,.35,2.9],[x,1.95,0],pale,g);for(let a of [-1,1])box([.65,.72,1.3],[x+a*.9,2.5,0],cream,g);
  const mat=cream.clone();mat.side=THREE.DoubleSide;shellHalf(x,y,0,.95,.95,2.65,mat,g,false);
- const cover=new THREE.Group();g.add(cover);shellHalf(x,y,0,.95,.95,2.65,mat,cover,true);covers.push({obj:cover,amount:2.7,part:'generator'});
+ const cover=new THREE.Group();g.add(cover);shellHalf(x,y,0,.95,.95,2.65,mat,cover,true);covers.push({obj:cover,part:'generator'});
  for(let a of [-1,1]){torus(.94,.075,[x+a*1.36,y,0],cream,g);bolts(x+a*1.43,.82,y,0,g);}
  // Closed stator-coil loops: two axial sides joined by curved end windings.
  // Six closed, stationary coils are simplified spatially.
+ generatorCoils=copper.clone();generatorCoils.emissive.set(0xffa323);
  for(let i=0;i<6;i++)for(let strand=0;strand<2;strand++){
  const a=i/6*Math.PI*2+.03*strand,b=a+Math.PI*.78,r=.73+strand*.043,pts=[];
  const at=(xx,ang,rr=r)=>[xx,y+Math.cos(ang)*rr,Math.sin(ang)*rr];
@@ -138,7 +191,7 @@ function buildGenerator(){
  for(let j=0;j<=10;j++){const f=j/10;pts.push(at(x+1.22+Math.sin(f*Math.PI)*.16,a+(b-a)*f,r+.025*Math.sin(f*Math.PI)));}
  pts.push(at(x+1.13,b),at(x,b),at(x-1.13,b));
  for(let j=0;j<=10;j++){const f=j/10;pts.push(at(x-1.22-Math.sin(f*Math.PI)*.16,b+(a-b)*f,r+.025*Math.sin(f*Math.PI)));}
- pts.push(at(x-1.13,a));pipe(pts,.032,copper,g);
+ pts.push(at(x-1.13,a));pipe(pts,.032,generatorCoils,g);
  }
  magnet=new THREE.Group();magnet.position.set(x,y,0);g.add(magnet);
  cylinder(.41,.41,2.4,[0,0,0],dark,magnet);
@@ -153,12 +206,17 @@ function buildGenerator(){
  const fieldMat=new THREE.MeshBasicMaterial({color:0xd2a238,transparent:true,opacity:0,depthWrite:false});fieldMaterials.push(fieldMat);
  for(let x0 of [-.65,0,.65])for(let side of [-1,1])pipe([[x0,.42,0],[x0,.48,side*.47],[x0,0,side*.59],[x0,-.48,side*.47],[x0,-.42,0]],.012,fieldMat,magnet);
  bearing(6.2,y,0,g);cylinder(.48,.48,.62,[6.55,y,0],cream,g);torus(.42,.028,[6.88,y,0],dark,g);
- const junction=box([.7,.6,.7],[4.7,2.55,1.0],cream,g);
+ box([1.8,.45,.52],[4.7,2.55,1.07],cream,g);
+ for(let phase=0;phase<3;phase++){
+  const xx=4.1+phase*.6;
+  cylinder(.09,.09,.35,[xx,2.55,1.42],dark,g,'z');
+  torus(.095,.025,[xx,2.55,1.57],phaseSleeves[phase],g,'z');
+ }
 }
 function buildCondenser(){
  const g=group('condenser'),x=-.25,y=.97,z=.65;
  const glass=new THREE.MeshStandardMaterial({color:0x80b4b0,transparent:true,opacity:.2,roughness:.22,metalness:.15,depthWrite:false,side:THREE.DoubleSide});
- const outside=new THREE.Group();g.add(outside);box([4.2,1.48,2.0],[x,y,z],cream,outside);covers.push({obj:outside,amount:2.1,part:'condenser',hideExploded:true});
+ const outside=new THREE.Group();g.add(outside);box([4.2,1.48,2.0],[x,y,z],cream,outside);covers.push({obj:outside,part:'condenser'});
  box([4.18,1.47,2.02],[x,y,z],glass,g);
  const liquid=new THREE.MeshStandardMaterial({color:0x4187ad,transparent:true,opacity:.7,roughness:.2});box([4.04,.27,1.86],[x,.43,z],liquid,g);
  // Two manifolds connect many cooling tubes. Main steam condenses outside these sealed tubes.
@@ -179,25 +237,73 @@ function buildPipesAndGrid(){
  for(let p of [[-3.43,5.67,-.1],[-3.08,4.55,-.1]])torus(.19,.044,p,steel,root,p[1]<5?'y':'x');
  flowPipe([[1.15,3.1,.25],[1.48,2.5,.4],[1.0,1.7,.65]],.27,hot,0xffd7a7,.11,'steam-out');
  flowPipe([[-.8,.46,1.44],[-1.4,.5,2.2],[-3.25,.6,2.15],[-4.2,.65,2.15],[-5.0,.82,2.0],[-5.05,1.1,-1.5]],.12,water,0xb9e3ff,.11,'water');
- // Transformer and outgoing cable represent energy delivered to the external circuit.
- box([1.8,1.25,1.6],[8.0,1.12,.4],support);box([2.1,.23,1.9],[8,.42,.4],pale);
- for(let i=0;i<12;i++)box([.06,1.03,1.88],[7.2+i*.145,1.16,.4],dark);
- for(let x of [7.5,8,8.5]){cylinder(.08,.08,.53,[x,2.0,.4],copper,root,'y');for(let j=0;j<4;j++)cylinder(.125,.125,.065,[x,1.8+j*.11,.4],cream,root,'y');}
- const electric=flowPipe([[4.7,2.5,1.15],[5.1,1.6,1.5],[6.5,.65,2.08],[8.25,.66,2.08],[8.25,1.6,.7]],.056,gold,0xfff0a5,.13,'electric');
- const pylonX=9.3,pylonZ=-2.2;
- for(let side of [-1,1]){lineBetween([pylonX+side*.52,.32,pylonZ],[pylonX+side*.19,4.9,pylonZ],.035,support);}
- for(let i=0;i<6;i++){let y=.4+i*.65;lineBetween([pylonX-.5+i*.04,y,pylonZ],[pylonX+.5-(i+1)*.04,y+.65,pylonZ],.018,support);lineBetween([pylonX+.5-i*.04,y,pylonZ],[pylonX-.5+(i+1)*.04,y+.65,pylonZ],.018,support);}
- for(let y of [3.85,4.5]){lineBetween([8.45,y,pylonZ],[10.15,y,pylonZ],.035,support);for(let xx of [8.5,10.1])cylinder(.07,.07,.25,[xx,y-.18,pylonZ],cream,root,'y');}
- for(let xx of [8.5,9.3,10.1])pipe([[8,2.15,.4],[xx,3.75,pylonZ],[xx+.45,3.6,-3.3],[xx+.5,3.5,-4.5]],.018,dark);
- flow(new THREE.CatmullRomCurve3([[8,2.15,.4],[9.3,3.75,-2.2],[9.8,3.5,-4.5]].map(v)),0xffe895,20,.11,'electric',.046);
+ buildElectricalGrid();
 }
+// Phase conductors stay separate from generator terminals to the receiving transformer.
+const phaseSleeves=[0xb46350,0xc8a842,0x588ca2].map(color=>new THREE.MeshStandardMaterial({color,roughness:.5}));
+const conductor=new THREE.MeshStandardMaterial({color:0x3d4947,metalness:.55,roughness:.45});
+const porcelain=new THREE.MeshStandardMaterial({color:0xdadcc6,roughness:.24,metalness:.12});
+function insulator(x,y,z,height,parent=root){
+ cylinder(.065,.065,height,[x,y+height/2,z],copper,parent,'y',12);
+ const discs=Math.max(3,Math.round(height/.105));
+ for(let i=0;i<discs;i++)cylinder(.115,.14,.045,[x,y+.05+i*(height-.09)/discs,z],porcelain,parent,'y',16);
+ return [x,y+height,z];
+}
+function electricalPath(points,type,phase,parent){
+ const cable=pipe(points,.033,conductor,parent);
+ const inst=flow(cable.curve,0xffdb54,15,.13,type,.07);
+ const system=flowSystems.at(-1);system.phase=phase;
+ electricalCircuits.push({type,phase,points});
+ return inst;
+}
+function transformer(x,z,parent){
+ box([2.05,.18,3.3],[x,.39,z],pale,parent);
+ box([1.45,1.26,2.65],[x,1.12,z],support,parent);
+ box([1.56,.13,2.78],[x,1.8,z],cream,parent);
+ for(let side of [-1,1])for(let i=0;i<11;i++)box([.3,.95,.055],[x+side*.82,1.1,z-1.13+i*.225],dark,parent);
+ cylinder(.18,.18,1.95,[x,2.14,z],cream,parent,'z'); // oil conservator
+ for(let zz of [-.8,.8])lineBetween([x,1.8,z+zz],[x,2.0,z+zz],.04,steel,parent);
+}
+function buildElectricalGrid(){
+ const g=group('grid');transformer(8,-2,g);transformer(13.6,-2,g);
+ // Three independent low-voltage and high-voltage bushings on each transformer.
+ for(let phase=0;phase<3;phase++){
+  const z=-3.05+phase*1.05;
+  const lv=insulator(7.48,1.9,z,.44,g),hv=insulator(8.53,1.9,z,.73,g);
+  const receiver=insulator(13.08,1.9,z,.66,g);
+  cylinder(.087,.087,.13,[7.48,2.2,z],phaseSleeves[phase],g,'y',12);
+  electricalPath([[4.1+phase*.6,2.55,1.59],[4.1+phase*.6,1.15,1.82+phase*.22],[5.9+phase*.2,.5,1.82+phase*.22],[6.62+phase*.19,.6,z],[6.87,1.55,z],lv],'electric',phase,g);
+  // Separate disconnector, circuit breaker, and outgoing disconnector for every phase.
+  box([2.65,.12,.46],[10.28,.39,z],pale,g);
+  const a=insulator(9.28,1.02,z,.78,g),b=insulator(9.68,1.02,z,.78,g);
+  for(const x of [9.28,9.68,11.05,11.46])box([.10,.63,.1],[x,.70,z],support,g);
+  lineBetween(a,b,.043,copper,g); // closed knife-switch blade
+  cylinder(.16,.16,.54,[10.28,.78,z],dark,g,'y',16);
+  insulator(10.28,1.05,z,.99,g); // breaker interrupting chamber
+  const c=insulator(11.05,1.02,z,.78,g),d=insulator(11.46,1.02,z,.78,g);
+  lineBetween(c,d,.043,copper,g);
+  electricalPath([hv,[8.91,2.39,z],a,b,[10.28,2.04,z],c,d,[12.08,3.43,z],[12.75,3.13,z],receiver],'transmission',phase,g);
+ }
+ // Steel gantry with three separate suspension insulators, one for each conductor.
+ for(const z of [-3.8,-.2]){
+  box([.47,.12,.47],[12.08,.4,z],pale,g);
+  lineBetween([12.08,.4,z],[12.08,4.02,z],.062,support,g);
+ }
+ lineBetween([12.08,4.02,-3.8],[12.08,4.02,-.2],.08,support,g);
+ for(let i=0;i<3;i++)insulator(12.08,3.43,-3.05+i*1.05,.59,g);
+ // The receiving transformer supplies a two-wire, single-phase lamp branch.
+ insulator(13.34,1.23,-.47,.40,g);insulator(13.88,1.23,-.47,.40,g);
+ pipe([[13.88,1.63,-.47],[14.45,1.2,-.35],[14.45,.29,-.35]],.018,copper,g);
+ cylinder(.035,.035,.4,[14.45,.3,-.35],copper,g,'y',10);
+}
+
 function buildBase(){
- box([21.8,.42,9.7],[.1,.02,0],new THREE.MeshStandardMaterial({color:0xd1d9c8,roughness:.9}));
- box([21.5,.04,9.4],[.1,.255,0],new THREE.MeshStandardMaterial({color:0xe1e4d6,roughness:.9}));
- const grid=new THREE.GridHelper(21,42,0xbecab8,0xd1d9c9);grid.position.set(.1,.287,0);root.add(grid);
+ box([26.6,.42,9.7],[2.5,.02,0],new THREE.MeshStandardMaterial({color:0xd1d9c8,roughness:.9}));
+ box([26.3,.04,9.4],[2.5,.255,0],new THREE.MeshStandardMaterial({color:0xe1e4d6,roughness:.9}));
+ const grid=new THREE.GridHelper(26,52,0xbecab8,0xd1d9c9);grid.position.set(2.5,.287,0);root.add(grid);
  // Grid is clipped visually by its modest opacity; platform edge gives the model a physical scale.
- grid.material.transparent=true;grid.material.opacity=.25;grid.scale.z=.43;
- for(let x=-9;x<10;x+=1.0)box([.4,.015,.1],[x,.29,4.23],pale);
+ grid.material.transparent=true;grid.material.opacity=.25;grid.scale.z=.35;
+ for(let x=-9;x<15;x+=1.0)box([.4,.015,.1],[x,.29,4.23],pale);
  for(let x of [-8.7,6.3]){box([1.3,.11,3.1],[x,.32,-.5],dark);for(let y=0;y<5;y++)box([1.3,.13,.25],[x,.39+y*.13,1.0-y*.29],support);}
  // A small person provides scale without pretending the model is a measured engineering drawing.
  const person=new THREE.Group();person.position.set(6.4,.42,2.9);root.add(person);cylinder(.082,.082,.28,[0,.37,0],dark,person,'y',10);mesh(new THREE.SphereGeometry(.075,10,8),cream,[0,.58,0],person);for(let x of [-.046,.046])lineBetween([x,.04,0],[x,.25,0],.025,dark,person);for(let x of [-.11,.11])lineBetween([x,.21,0],[x*.7,.46,0],.022,dark,person);
@@ -235,28 +341,57 @@ function buildFire(parent){
  sparks=new THREE.InstancedMesh(new THREE.SphereGeometry(.021,5,4),new THREE.MeshBasicMaterial({color:0xffb446,toneMapped:false}),38);sparks.frustumCulled=false;parent.add(sparks);
  fireLight=new THREE.PointLight(0xff8123,0,7);fireLight.position.set(-6.1,2.1,-.3);parent.add(fireLight);
 }
+function radialTexture(){
+ const c=document.createElement('canvas');c.width=c.height=128;const ctx=c.getContext('2d');
+ const gradient=ctx.createRadialGradient(64,64,0,64,64,64);
+ gradient.addColorStop(0,'rgba(255,246,188,.75)');gradient.addColorStop(.22,'rgba(255,208,83,.42)');gradient.addColorStop(.55,'rgba(255,163,40,.13)');gradient.addColorStop(1,'rgba(255,157,30,0)');
+ ctx.fillStyle=gradient;ctx.fillRect(0,0,128,128);return new THREE.CanvasTexture(c);
+}
 function buildLoad(){
- pipe([[8.9,.35,3.45],[8.9,2.65,3.45],[8.8,2.83,3.45],[8.3,2.83,3.45]],.045,dark);
- cylinder(.2,.12,.13,[8.3,2.73,3.45],dark,root,'y');
- loadBulb=mesh(new THREE.SphereGeometry(.13,16,12),new THREE.MeshStandardMaterial({color:0xe7e6ce,emissive:0xffba45,emissiveIntensity:0,roughness:.25}),[8.3,2.60,3.45]);
- loadLight=new THREE.PointLight(0xffcf70,0,7);loadLight.position.set(8.3,2.5,3.45);root.add(loadLight);
- flowPipe([[8.0,1.3,1.1],[8.15,.4,1.65],[8.9,.38,2.9],[8.9,.6,3.45],[8.9,2.64,3.45],[8.3,2.65,3.45]],.035,gold,0xffd658,.13,'load-electric');
+ const g=group('load'),x=12.2,z=2.35;
+ box([1.4,.18,1.1],[x,.42,z],dark,g);box([1.15,.09,.9],[x,.55,z],cream,g);
+ cylinder(.36,.43,.35,[x,.76,z],porcelain,g,'y');
+ cylinder(.25,.25,.35,[x,1.03,z],steel,g,'y');
+ for(let i=0;i<5;i++)torus(.255,.025,[x,.9+i*.062,z],dark,g,'y');
+ const profile=[[.205,0],[.215,.15],[.32,.31],[.46,.46],[.56,.65],[.58,.86],[.54,1.07],[.4,1.27],[.21,1.4],[0,1.45]].map(p=>new THREE.Vector2(...p));
+ loadBulb=mesh(new THREE.LatheGeometry(profile,48),new THREE.MeshStandardMaterial({color:0xb8c8c7,transparent:true,opacity:.21,roughness:.16,metalness:.06,emissive:0xffb72e,emissiveIntensity:0,side:THREE.DoubleSide,depthWrite:false}),[x,1.18,z],g);
+ loadBulb.castShadow=false;
+ const rimMaterial=new THREE.ShaderMaterial({uniforms:lampUniforms,transparent:true,depthWrite:false,
+  vertexShader:`varying vec3 n;varying vec3 eye;void main(){vec4 p=modelViewMatrix*vec4(position,1.);n=normalize(normalMatrix*normal);eye=normalize(-p.xyz);gl_Position=projectionMatrix*p;}`,
+  fragmentShader:`uniform float uLight;varying vec3 n;varying vec3 eye;void main(){float rim=pow(1.-abs(dot(normalize(n),normalize(eye))),2.2);vec3 c=mix(vec3(.26,.40,.43),vec3(1.,.67,.20),uLight);gl_FragColor=vec4(c,rim*.72);#include <colorspace_fragment>}`.replace(';#include',';\n#include')
+ });
+ const glassRim=mesh(loadBulb.geometry,rimMaterial,[x,1.18,z],g);glassRim.castShadow=false;
+ const filamentMat=new THREE.MeshStandardMaterial({color:0x292825,emissive:0xffd784,emissiveIntensity:0,roughness:.65});
+ // Both filament ends have separate support wires and socket contacts: a closed load circuit.
+ for(const side of [-1,1])lineBetween([x+side*.07,1.13,z],[x+side*.28,1.99,z],.016,steel,g);
+ const coil=[];for(let i=0;i<=160;i++){const f=i/160;coil.push([x-.28+f*.56,1.99+Math.sin(f*Math.PI*24)*.033,z+Math.cos(f*Math.PI*24)*.033]);}
+ loadFilament=pipe(coil,.012,filamentMat,g).mesh;
+ const glowTexture=radialTexture();
+ loadHalo=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTexture,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}));loadHalo.position.set(x,2.04,z);loadHalo.scale.set(3.6,3.6,1);g.add(loadHalo);
+ loadPool=mesh(new THREE.PlaneGeometry(6,6),new THREE.MeshBasicMaterial({map:glowTexture,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}),[x,.30,z],g);loadPool.rotation.x=-Math.PI/2;loadPool.castShadow=false;
+ loadLight=new THREE.PointLight(0xffbf4c,0,10,2);loadLight.position.set(x,2.06,z);g.add(loadLight);
+ electricalPath([[13.34,1.63,-.47],[13.25,.48,.25],[12.56,.42,1.45],[12.53,.55,2.35],[12.33,.79,2.35],[12.27,1.13,2.35]],'load-electric',0,g);
+ electricalPath([[12.13,1.13,2.35],[12.01,.79,2.35],[11.83,.55,2.35],[11.79,.42,1.16],[13.88,.48,.25],[13.88,1.63,-.47]],'load-electric',1,g);
+ // The second line is the return conductor, with no travelling-energy markers.
+ flowSystems.at(-1).returnConductor=true;
 }
 
 const viewpoints={
- overview:{target:[0,2.7,0],offset:[17,13.5,22]},
- boiler:{target:[-6,3.1,-.2],offset:[7.0,4.2,10.0]},
+ overview:{target:[2.4,2.55,0],offset:[18.4,15,26]},
+ boiler:{target:[-6.1,3.5,-.65],offset:[4,2.2,9.6]},
  turbine:{target:[-.5,3.2,0],offset:[5.7,4.25,8.4]},
  generator:{target:[4.65,3.3,0],offset:[5.0,3.0,6.5]},
- condenser:{target:[-.7,1.15,1.4],offset:[6.0,3.8,8.7]}
+ condenser:{target:[-.7,1.15,1.4],offset:[6.0,3.8,8.7]},
+ grid:{target:[10.4,1.9,-1.8],offset:[5,6.3,8.8]},
+ load:{target:[12.2,1.55,2.35],offset:[4.5,2.7,7.4]}
 };
 const tourNodes=[
  {t:0,...viewpoints.overview},{t:1.8,...viewpoints.condenser},
  {t:4.8,target:[-3.7,1.2,1.2],offset:[7,4.4,9]},
- {t:7.6,...viewpoints.boiler},{t:10.6,target:[-5.9,3.8,-.1],offset:[7.7,4.6,10]},
+ {t:7.3,...viewpoints.boiler},{t:9.3,...viewpoints.boiler},{t:10.8,target:[-5.9,4.7,-.7],offset:[4.3,2.4,7.6]},
  {t:13.4,...viewpoints.turbine},{t:15.8,...viewpoints.turbine},
- {t:18.5,...viewpoints.generator},{t:21.3,target:[6.3,2.6,1],offset:[8.3,5.0,10]},
- {t:24.7,...viewpoints.condenser},{t:28.5,...viewpoints.overview},{t:30,...viewpoints.overview}
+ {t:18.5,...viewpoints.generator},{t:21.5,...viewpoints.grid},{t:22.8,...viewpoints.grid},
+ {t:24.5,...viewpoints.load},{t:26.2,...viewpoints.load},{t:32,...viewpoints.load}
 ];
 let cameraTween=null,lastTime=0;
 const dummy=new THREE.Object3D(),flowColor=new THREE.Color(),coldColor=new THREE.Color(0x3994e5),steamColor=new THREE.Color(0xffb65e);
@@ -280,7 +415,7 @@ function init(){
  controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.085;controls.minDistance=4;controls.maxDistance=110;controls.maxPolarAngle=Math.PI*.48;controls.minPolarAngle=.10;controls.enablePan=true;
  setCamera('overview',true);
  let oldWidth=wrap.clientWidth,oldHeight=wrap.clientHeight;
- new ResizeObserver(()=>{camera.aspect=wrap.clientWidth/wrap.clientHeight;camera.updateProjectionMatrix();renderer.setSize(wrap.clientWidth,wrap.clientHeight,false);if(Math.abs(oldWidth-wrap.clientWidth)>40||Math.abs(oldHeight-wrap.clientHeight)>80){oldWidth=wrap.clientWidth;oldHeight=wrap.clientHeight;if(state.follow&&state.started&&state.time<30)updateTourCamera();else setCamera(state.step,true);}}).observe(wrap);
+ new ResizeObserver(()=>{camera.aspect=wrap.clientWidth/wrap.clientHeight;camera.updateProjectionMatrix();renderer.setSize(wrap.clientWidth,wrap.clientHeight,false);if(Math.abs(oldWidth-wrap.clientWidth)>40||Math.abs(oldHeight-wrap.clientHeight)>80){oldWidth=wrap.clientWidth;oldHeight=wrap.clientHeight;if(state.follow&&state.started)updateTourCamera();else setCamera(state.step,true);}}).observe(wrap);
  controls.addEventListener('start',()=>setFollow(false));
  const ray=new THREE.Raycaster();let down=null;
  $('#scene').addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
@@ -290,18 +425,17 @@ function init(){
 }
 function isHierarchyVisible(o){while(o){if(!o.visible)return false;o=o.parent;}return true;}
 function setCamera(key,instant=false){
- if(!camera||!controls)return;const view=viewpoints[key],target=v(view.target),offset=fitOffset(v(view.offset),key==='overview');if(state.mode==='exploded')offset.multiplyScalar(1.09);const position=target.clone().add(offset);
+ if(!camera||!controls)return;const view=viewpoints[key],target=v(view.target),offset=fitOffset(v(view.offset),key==='overview');const position=target.clone().add(offset);
  if(instant||reduceMotion){controls.target.copy(target);camera.position.copy(position);controls.update();cameraTween=null;}
  else cameraTween={from:camera.position.clone(),to:position,fromTarget:controls.target.clone(),target,elapsed:0};
 }
 function setFollow(value){state.follow=value;cameraTween=null;$('#follow').classList.toggle('active',value);$('#follow').setAttribute('aria-pressed',String(value));}
 function updateTourCamera(){
- const t=Math.min(state.time,30);let i=0;while(i<tourNodes.length-2&&t>tourNodes[i+1].t)i++;
+ const t=Math.min(state.time,DURATION);let i=0;while(i<tourNodes.length-2&&t>tourNodes[i+1].t)i++;
  const a=tourNodes[i],b=tourNodes[i+1],f=ramp(t,a.t,b.t);
  travelTarget.lerpVectors(v(a.target),v(b.target),f);
- const offsetA=fitOffset(v(a.offset),a.t===0||a.t>=28.5),offsetB=fitOffset(v(b.offset),b.t===0||b.t>=28.5);
+ const offsetA=fitOffset(v(a.offset),a.t===0),offsetB=fitOffset(v(b.offset),b.t===0);
  travelOffset.lerpVectors(offsetA,offsetB,f);
- if(state.mode==='exploded')travelOffset.multiplyScalar(1.09);
  controls.target.copy(travelTarget);camera.position.copy(travelTarget).add(travelOffset);
 }
 function setMode(mode){state.mode=mode;$$('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});if(!state.follow||!state.started)setCamera(state.step);}
@@ -326,16 +460,15 @@ function updateVisuals(dt){
  const t=state.started?state.time:0;
  state.stage=state.started?stages.findLast(s=>t>=s.at).name:'idle';state.phase=state.started?rotorPhase(t):0;
  rotor.rotation.x=state.phase;magnet.rotation.x=state.phase;
- const target=state.mode==='outside'?0:state.mode==='cutaway'?1:2;state.cover=reduceMotion?target:THREE.MathUtils.damp(state.cover,target,5,dt);
- for(const c of covers){c.obj.visible=state.mode==='outside'||(state.mode==='exploded'&&!c.hideExploded);c.obj.position.y=state.mode==='exploded'?c.amount*Math.max(0,state.cover-1):0;}
- for(const walls of boilerWalls){walls.visible=state.mode!=='cutaway';const f=state.mode==='exploded'?Math.max(0,state.cover-1):0;walls.position.set(-f*2.8,f*2.1,f*.8);}
+ for(const c of covers)c.obj.visible=state.mode==='outside';
+ for(const walls of boilerWalls)walls.visible=state.mode==='outside';
  const burn=state.started?ramp(t,5.8,7.3):0;fireUniforms.uTime.value=t;fireUniforms.uBurn.value=burn;
  for(const flame of flames){flame.visible=burn>.001;flame.rotation.y=Math.atan2(camera.position.x-flame.position.x,camera.position.z-flame.position.z);flame.scale.y=.6+.4*burn;}
  fireLight.intensity=burn*48*(.91+.09*Math.sin(t*16)*Math.sin(t*7.3));sparks.visible=burn>.001;
  for(let i=0;i<sparks.count&&burn>.001;i++){const life=(t*(.21+(i%5)*.015)+i*.137)%1;dummy.position.set(-7.12+(i%7)*.34+Math.sin(t*2+i)*.1*life,1.14+life*2.9,-1.12+(i%4)*.44+Math.sin(i+t)*.08);dummy.quaternion.identity();dummy.scale.setScalar((1-life)*burn);dummy.updateMatrix();sparks.setMatrixAt(i,dummy.matrix);}sparks.instanceMatrix.needsUpdate=true;
  for(const s of flowSystems){
- const elapsed=state.started?t-s.start:-1;s.inst.visible=elapsed>=0;
- if(['internal','condensation','boiler','superheater','heat-transfer'].includes(s.type)&&state.mode==='outside')s.inst.visible=false;
+ const elapsed=state.started?t-s.start:-1;s.inst.visible=elapsed>=0&&!s.returnConductor;
+ if(['internal','condensation','boiler','superheater','heat-transfer','heat-in'].includes(s.type)&&state.mode==='outside')s.inst.visible=false;
  s.visibleCount=0;if(!s.inst.visible)continue;
  for(let i=0;i<s.count;i++){
  const u=elapsed*s.velocity/s.length-(i+Math.sin(i*4.13)*.15)/s.count,f=((u%1)+1)%1,active=u>=0;
@@ -347,17 +480,22 @@ function updateVisuals(dt){
  }
  s.inst.instanceMatrix.needsUpdate=true;if(s.inst.instanceColor)s.inst.instanceColor.needsUpdate=true;
  }
+ updateBoilerWater(t);
  const power=state.started?ramp(t,13.1,15.0):0;
+ generatorCoils.emissiveIntensity=power*.42;
  for(const mat of fieldMaterials)mat.opacity=power*(.22+.42*Math.abs(Math.sin(state.phase)));
- const light=state.started?ramp(t,16.4,17.2):0;loadBulb.material.emissiveIntensity=light*4;loadLight.intensity=light*25;
- $('#timeline').value=Math.min(30,t);$('#timeline').style.setProperty('--progress',`${Math.min(t/30,1)*100}%`);
+ const light=state.started?ramp(t,LAMP_ON,LAMP_ON+.65):0;
+ lampUniforms.uLight.value=light;loadBulb.material.emissiveIntensity=light*1.6;loadBulb.material.opacity=.21+light*.25;
+ loadFilament.material.emissiveIntensity=light*16;loadFilament.material.color.set(light>.01?0xffe6aa:0x292825);
+ loadHalo.material.opacity=light*.44;loadPool.material.opacity=light*.65;loadLight.intensity=light*38;
+ $('#timeline').value=Math.min(DURATION,t);$('#timeline').style.setProperty('--progress',`${Math.min(t/DURATION,1)*100}%`);
 }
 function animate(now){
  requestAnimationFrame(animate);const dt=Math.min((now-(lastTime||now))/1000,.05);lastTime=now;if(document.hidden)return;
  if(state.playing)state.time+=dt*state.speed;
- if(state.follow&&state.started&&state.time<=30)updateTourCamera();
+ if(state.follow&&state.started&&state.time<=DURATION)updateTourCamera();
  else if(cameraTween){cameraTween.elapsed+=dt;const f=ramp(cameraTween.elapsed,0,1.1);camera.position.lerpVectors(cameraTween.from,cameraTween.to,f);controls.target.lerpVectors(cameraTween.fromTarget,cameraTween.target,f);if(f===1)cameraTween=null;}
  updateVisuals(dt);controls.update();renderer.render(scene,camera);state.rendered=true;
 }
 try{init();}catch(err){console.error(err);$('#loading').hidden=false;$('#loading').className='error';$('#loading').innerHTML='<div>3Dを表示できませんでした。</div><button onclick="location.reload()">再読み込み</button>';$$('button,select,input').forEach(b=>{if(!b.closest('#loading'))b.disabled=true;});}
-window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};
+window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,filamentPower:loadFilament?.material.emissiveIntensity,waterHeat:heatUniforms.uHeat.value,bubbleCount:boilerBubbles?.visible?boilerBubbles.count:0,circuits:electricalCircuits.map(({type,phase,points})=>({type,phase,start:points[0],end:points.at(-1)})),drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,phase:s.phase,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};
