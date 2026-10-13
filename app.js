@@ -9,13 +9,15 @@ const state = { mode:'cutaway', step:'overview', started:false, playing:false, f
 let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment,fireLight,sparks,loadLight,loadLens,loadHalo,loadPool,streetPole,boilerBubbles,drumLiquid,generatorCoils;
 const flowMaterials=[],covers=[],boilerWalls=[],flowSystems=[],flames=[],pickables=[],parts={},fieldMaterials=[];
 const electricalCircuits=[],heaterMaterials=[];
-const DURATION=32, LAMP_ON=26.2;
+const DURATION=38, LAMP_ON=26.2;
+const evCells=[],evHeadlamps=[],evLightPools=[];
+let evBody,evPort,evScreen,evGlow,evFeedArrival=0,evArrival=0,evCharge=0;
 const heatUniforms={uHeat:{value:0}};
 let loadArrival=0;
 const stages = [
  {at:0,name:'condenser'}, {at:1,name:'feedwater'}, {at:5.8,name:'boiler'},
  {at:9.6,name:'superheater'}, {at:11.6,name:'steam'}, {at:12.7,name:'turbine'},
- {at:17,name:'generator'}, {at:20,name:'distribution'}, {at:24,name:'load'}, {at:26.2,name:'light'}, {at:32,name:'complete'}
+ {at:17,name:'generator'}, {at:20,name:'distribution'}, {at:24,name:'load'}, {at:26.2,name:'light'}, {at:28,name:'charging'}, {at:31,name:'electric-car'}, {at:38,name:'complete'}
 ];
 const timings = {
  water:{start:1,velocity:1.65},boiler:{start:5.8,velocity:1.1},
@@ -23,6 +25,7 @@ const timings = {
  internal:{start:12.25,velocity:9},'steam-out':{start:13,velocity:3.5},
  condensation:{start:14.8,velocity:.8},'heat-transfer':{start:14.8,velocity:.6},
  electric:{start:13.4,velocity:4.4},'load-electric':{start:24.1,velocity:5.4},
+ 'ev-feed':{start:27.5,velocity:4.2},'ev-charge':{start:29.3,velocity:2.6},
  'heat-in':{start:6,velocity:1.4},downcomer:{start:5.4,velocity:.8},
  cooling:{start:.35,velocity:1.1},exhaust:{start:5.8,velocity:1.4}
 };
@@ -336,7 +339,8 @@ function buildLoad(){
  box([5.7,.065,3.2],[12.35,.315,1.2],asphalt,g);
  box([5.7,.17,1.1],[12.35,.367,-.96],curb,g);
  for(let i=0;i<11;i++)box([.49,.15,.13],[9.75+i*.52,.39,-.37],pale,g);
- for(let xx=10;xx<15;xx+=1.35)box([.68,.006,.045],[xx,.351,1.2],paint,g);
+ for(let zz of [.18,2.22])box([4.45,.006,.04],[11.9,.351,zz],paint,g);
+ box([.04,.006,2.04],[9.68,.351,1.2],paint,g);
  for(let zz of [-.25,2.64])box([5.5,.006,.045],[12.35,.351,zz],paint,g);
  for(let zz=-.08;zz<2.55;zz+=.43)box([.67,.007,.22],[14.72,.352,zz],paint,g);
  // Tapered pole, curved arm and a flat LED luminaire.
@@ -360,14 +364,93 @@ function buildLoad(){
  flowSystems.at(-1).returnConductor=true;
 }
 
+function carSection(points,depth,material,pos,parent,bevel=.06){
+ const shape=new THREE.Shape();shape.moveTo(...points[0]);for(const p of points.slice(1))shape.lineTo(...p);shape.closePath();
+ const geo=new THREE.ExtrudeGeometry(shape,{depth,bevelEnabled:true,bevelSegments:3,steps:1,bevelSize:bevel,bevelThickness:bevel,curveSegments:8});geo.translate(0,0,-depth/2);
+ return mesh(geo,material,pos,parent);
+}
+function buildEV(){
+ const g=group('ev'),cx=11.9,cz=1.2;
+ const paint=new THREE.MeshStandardMaterial({color:0x71aaba,metalness:.48,roughness:.28});
+ const trim=new THREE.MeshStandardMaterial({color:0x28373d,metalness:.4,roughness:.45});
+ const rubber=new THREE.MeshStandardMaterial({color:0x242b2c,roughness:.9});
+ const glass=new THREE.MeshStandardMaterial({color:0x233e50,metalness:.42,roughness:.18});
+ evBody=paint.clone();evBody.transparent=true;evBody.opacity=.46;evBody.depthWrite=false;
+ carSection([[-1.91,.41],[-1.95,.59],[-1.75,.81],[-1.13,.92],[.97,.94],[1.73,.78],[1.95,.58],[1.90,.39]],1.45,evBody,[cx,.35,cz],g,.08);
+ // A solid roof, glazing, bumpers and wheels retain a recognizable car in cutaway view.
+ carSection([[-1.05,.94],[-.58,1.50],[.56,1.50],[1.16,.94]],1.25,glass,[cx,.35,cz],g,.035);
+ const roof=mesh(new THREE.SphereGeometry(1,24,12),paint,[cx-.01,1.895,cz],g);roof.scale.set(.70,.055,.67);
+ box([.085,.55,1.33],[cx,1.58,cz],paint,g);
+ for(const side of [-1,1]){
+  lineBetween([cx-1.10,1.29,cz+side*.66],[cx-.6,1.86,cz+side*.66],.035,paint,g);
+  lineBetween([cx+1.18,1.29,cz+side*.66],[cx+.58,1.86,cz+side*.66],.035,paint,g);
+  for(const xx of [-.61,.64])box([.21,.035,.036],[cx+xx,1.19,cz+side*.805],trim,g);
+  box([.18,.10,.17],[cx+.85,1.44,cz+side*.87],paint,g);
+  for(const xx of [-1.22,1.22]){
+   cylinder(.33,.33,.18,[cx+xx,.70,cz+side*.77],rubber,g,'z',32);
+   cylinder(.21,.21,.195,[cx+xx,.70,cz+side*.78],steel,g,'z',24);
+   cylinder(.07,.07,.206,[cx+xx,.70,cz+side*.78],trim,g,'z',16);
+   for(let j=0;j<5;j++){const a=j*Math.PI*2/5;lineBetween([cx+xx,.70,cz+side*.89],[cx+xx+Math.cos(a)*.18,.70+Math.sin(a)*.18,cz+side*.89],.016,trim,g);}
+  }
+ }
+ box([.11,.22,1.28],[cx+1.94,.85,cz],paint,g);box([.11,.20,1.27],[cx-1.94,.83,cz],paint,g);
+ box([.02,.08,.78],[cx+2.005,.77,cz],trim,g);
+ for(let side of [-1,1]){
+  const lamp=box([.055,.13,.36],[cx+1.99,1.01,cz+side*.52],new THREE.MeshStandardMaterial({color:0x738786,emissive:0xe7faff,emissiveIntensity:0,roughness:.22}),g);lamp.castShadow=false;evHeadlamps.push(lamp);
+  box([.055,.11,.31],[cx-1.99,1.01,cz+side*.52],new THREE.MeshStandardMaterial({color:0x812e32,roughness:.3}),g);
+  const pool=mesh(new THREE.PlaneGeometry(1.4,.95),new THREE.MeshBasicMaterial({map:radialTexture(),transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}),[14.55,.361,cz+side*.52],g);pool.rotation.x=-Math.PI/2;pool.castShadow=false;evLightPools.push(pool);
+ }
+ // Underfloor battery modules accumulate energy after the charging connector is reached.
+ box([2.84,.10,1.12],[cx,.78,cz],trim,g);
+ for(let i=0;i<6;i++){
+  const material=new THREE.MeshStandardMaterial({color:0x345862,emissive:0x3dffc1,emissiveIntensity:0,roughness:.35,metalness:.25});
+  evCells.push(box([.39,.19,.99],[cx-1.08+i*.43,.93,cz],material,g));
+ }
+ evPort=torus(.095,.025,[cx-1.13,1.18,cz+.83],new THREE.MeshStandardMaterial({color:0x34564b,emissive:0x48ffb8,emissiveIntensity:0}),g,'z');
+ // A compact charger beside the parking bay; the plug cable contains supply and return conductors.
+ box([.94,.14,.80],[10.35,.39,3.22],pale,g);
+ box([.61,1.34,.40],[10.35,1.13,3.22],cream,g);
+ box([.48,.78,.045],[10.35,1.30,3.45],trim,g);
+ evScreen=new THREE.MeshStandardMaterial({color:0x24534c,emissive:0x47ffc0,emissiveIntensity:0});
+ // Physical battery pictogram: a frame with three bars, no extra text in the model.
+ for(const dx of [-.145,.145])box([.018,.22,.015],[10.35+dx,1.47,3.48],evScreen,g);
+ for(const yy of [1.36,1.58])box([.3,.018,.015],[10.35,yy,3.48],evScreen,g);
+ box([.07,.035,.015],[10.35,1.605,3.48],evScreen,g);
+ for(let i=0;i<3;i++)box([.07,.14,.018],[10.25+i*.10,1.47,3.485],evScreen,g);
+ electricalPath([[8.02,.85,.01],[8.9,.55,.04],[9.16,.55,.45],[9.16,.55,2.6],[9.3,.55,3.18],[10.21,.55,3.18],[10.25,1.15,3.24]],'ev-feed',0,g,.018,.05);
+ const feed=flowSystems.at(-1);evFeedArrival=feed.start+feed.length/feed.velocity;
+ electricalPath([[10.43,1.15,3.24],[10.45,.55,3.36],[9.25,.55,3.36],[8.98,.55,2.6],[8.98,.55,.4],[8.4,.85,.01]],'ev-feed',1,g,.018,.05);flowSystems.at(-1).returnConductor=true;
+ const chargePoints=[[10.60,1.25,3.23],[10.92,.81,3.0],[11.02,.71,2.55],[10.83,.99,2.17],[cx-1.13,1.18,cz+.93]];
+ const cable=pipe(chargePoints,.041,conductor,g);flow(cable.curve,0x6bffd0,12,.12,'ev-charge',.053);
+ const chargeFlow=flowSystems.at(-1);chargeFlow.start=Math.max(chargeFlow.start,evFeedArrival+.15);evArrival=chargeFlow.start+chargeFlow.length/chargeFlow.velocity;
+ electricalCircuits.push({type:'ev-charge',phase:0,points:chargePoints});
+ cylinder(.064,.064,.22,[cx-1.13,1.18,cz+.98],trim,g,'z',16);
+ evGlow=mesh(new THREE.PlaneGeometry(4.1,2.3),new THREE.MeshBasicMaterial({map:radialTexture(),color:0x58ffc5,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}),[cx,.363,cz],g);evGlow.rotation.x=-Math.PI/2;evGlow.castShadow=false;
+}
+function updateEV(t){
+ const arrivedAt=Math.max(31,evArrival),active=state.started;
+ evCharge=active?ramp(t,arrivedAt,arrivedAt+.6):0;
+ evBody.opacity=state.mode==='outside'?1:.46;evBody.depthWrite=state.mode==='outside';
+ const charger=active?ramp(t,evFeedArrival,evFeedArrival+.35):0;
+ evScreen.emissiveIntensity=charger*2.5;evPort.material.emissiveIntensity=evCharge*3.2;
+ for(let i=0;i<evCells.length;i++){
+  const fill=active?ramp(t,arrivedAt+i*.7,arrivedAt+i*.7+.6):0;
+  evCells[i].material.emissiveIntensity=fill*2.7;evCells[i].material.color.set(fill>.01?0x68e8bd:0x345862);
+ }
+ for(const lamp of evHeadlamps){lamp.material.emissiveIntensity=evCharge*7;lamp.material.color.set(evCharge>.01?0xeaffff:0x738786);}
+ for(const pool of evLightPools)pool.material.opacity=evCharge*.85;
+ evGlow.material.opacity=evCharge*.62;
+}
+
 const viewpoints={
- overview:{target:[2.4,2.55,0],offset:[18.4,15,26]},
+ overview:{target:[2.4,2.55,0],offset:[18.4,15,26],wide:true},
  boiler:{target:[-6.1,3.5,-.65],offset:[4,2.2,9.6]},
  turbine:{target:[-.5,3.2,0],offset:[5.7,4.25,8.4]},
  generator:{target:[4.65,3.3,0],offset:[5.0,3.0,6.5]},
  condenser:{target:[-.7,1.15,1.4],offset:[6.0,3.8,8.7]},
  grid:{target:[8.15,1.65,-.05],offset:[5.2,4.0,8.0]},
- load:{target:[11.8,2.5,.5],offset:[4.6,1.8,9.6]}
+ load:{target:[11.8,2.5,.5],offset:[4.6,1.8,9.6]},
+ ev:{target:[11.7,1.15,1.65],offset:[4.9,3.3,7.1],wide:true}
 };
 const tourNodes=[
  {t:0,...viewpoints.overview},{t:1.8,...viewpoints.condenser},
@@ -375,7 +458,7 @@ const tourNodes=[
  {t:7.3,...viewpoints.boiler},{t:9.3,...viewpoints.boiler},{t:10.8,target:[-5.9,4.7,-.7],offset:[4.3,2.4,7.6]},
  {t:13.4,...viewpoints.turbine},{t:15.8,...viewpoints.turbine},
  {t:18.5,...viewpoints.generator},{t:21.5,...viewpoints.grid},{t:22.8,...viewpoints.grid},
- {t:24.5,...viewpoints.load},{t:26.2,...viewpoints.load},{t:32,...viewpoints.load}
+ {t:24.5,...viewpoints.load},{t:27.3,...viewpoints.load},{t:29.1,...viewpoints.ev},{t:31,...viewpoints.ev},{t:38,...viewpoints.ev}
 ];
 let cameraTween=null,lastTime=0;
 const dummy=new THREE.Object3D(),flowColor=new THREE.Color(),coldColor=new THREE.Color(0x3994e5),steamColor=new THREE.Color(0xffb65e);
@@ -394,7 +477,7 @@ function init(){
  scene.add(new THREE.HemisphereLight(0xffffff,0x91a887,1.6));const sun=new THREE.DirectionalLight(0xfff4dc,2.6);sun.position.set(-5,16,10);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-15,right:15,top:13,bottom:-13,near:1,far:55});sun.shadow.normalBias=.035;sun.shadow.bias=-.0002;scene.add(sun);
  const fill=new THREE.DirectionalLight(0xe4f4ff,1.1);fill.position.set(8,6,-7);scene.add(fill);
  const floor=mesh(new THREE.PlaneGeometry(300,300),new THREE.MeshStandardMaterial({color:0xe4ebe2,roughness:1}),[0,-.26,0],scene);floor.rotation.x=-Math.PI/2;floor.castShadow=false;
- root=new THREE.Group();scene.add(root);buildBase();buildBoiler();buildTurbine();buildGenerator();buildCondenser();buildPipesAndGrid();buildLoad();
+ root=new THREE.Group();scene.add(root);buildBase();buildBoiler();buildTurbine();buildGenerator();buildCondenser();buildPipesAndGrid();buildLoad();buildEV();
  for(const [name,g] of Object.entries(parts))g.traverse(o=>{if(o.isMesh&&!(o.material instanceof THREE.ShaderMaterial)){o.userData.part=name;pickables.push(o);}});
  controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.085;controls.minDistance=4;controls.maxDistance=110;controls.maxPolarAngle=Math.PI*.48;controls.minPolarAngle=.10;controls.enablePan=true;
  setCamera('overview',true);
@@ -409,7 +492,7 @@ function init(){
 }
 function isHierarchyVisible(o){while(o){if(!o.visible)return false;o=o.parent;}return true;}
 function setCamera(key,instant=false){
- if(!camera||!controls)return;const view=viewpoints[key],target=v(view.target),offset=fitOffset(v(view.offset),key==='overview');const position=target.clone().add(offset);
+ if(!camera||!controls)return;const view=viewpoints[key],target=v(view.target),offset=fitOffset(v(view.offset),!!view.wide);const position=target.clone().add(offset);
  if(instant||reduceMotion){controls.target.copy(target);camera.position.copy(position);controls.update();cameraTween=null;}
  else cameraTween={from:camera.position.clone(),to:position,fromTarget:controls.target.clone(),target,elapsed:0};
 }
@@ -418,7 +501,7 @@ function updateTourCamera(){
  const t=Math.min(state.time,DURATION);let i=0;while(i<tourNodes.length-2&&t>tourNodes[i+1].t)i++;
  const a=tourNodes[i],b=tourNodes[i+1],f=ramp(t,a.t,b.t);
  travelTarget.lerpVectors(v(a.target),v(b.target),f);
- const offsetA=fitOffset(v(a.offset),a.t===0),offsetB=fitOffset(v(b.offset),b.t===0);
+ const offsetA=fitOffset(v(a.offset),!!a.wide),offsetB=fitOffset(v(b.offset),!!b.wide);
  travelOffset.lerpVectors(offsetA,offsetB,f);
  controls.target.copy(travelTarget);camera.position.copy(travelTarget).add(travelOffset);
 }
@@ -472,6 +555,7 @@ function updateVisuals(dt){
  streetPole.opacity=state.mode==='outside'?1:.45;streetPole.depthWrite=state.mode==='outside';
  loadLens.material.emissiveIntensity=light*5;loadLens.material.color.set(light>.01?0xffedbf:0x657575);
  loadHalo.material.opacity=light*.64;loadPool.material.opacity=light*.9;loadLight.intensity=light*165;
+ updateEV(t);
  $('#timeline').value=Math.min(DURATION,t);$('#timeline').style.setProperty('--progress',`${Math.min(t/DURATION,1)*100}%`);
 }
 function animate(now){
@@ -482,4 +566,4 @@ function animate(now){
  updateVisuals(dt);controls.update();renderer.render(scene,camera);state.rendered=true;
 }
 try{init();}catch(err){console.error(err);$('#loading').hidden=false;$('#loading').className='error';$('#loading').innerHTML='<div>3Dを表示できませんでした。</div><button onclick="location.reload()">再読み込み</button>';$$('button,select,input').forEach(b=>{if(!b.closest('#loading'))b.disabled=true;});}
-window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,luminairePower:loadLens?.material.emissiveIntensity,roadGlow:loadPool?.material.opacity,loadArrival,loadKind:'streetlight',distributionUnits:1,waterHeat:heatUniforms.uHeat.value,bubbleCount:boilerBubbles?.visible?boilerBubbles.count:0,circuits:electricalCircuits.map(({type,phase,points})=>({type,phase,start:points[0],end:points.at(-1)})),drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,phase:s.phase,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};
+window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,luminairePower:loadLens?.material.emissiveIntensity,roadGlow:loadPool?.material.opacity,loadArrival,loadKind:'streetlight-and-ev',evArrival,evFeedArrival,evCharge,evHeadlights:evHeadlamps[0]?.material.emissiveIntensity,evCellsLit:evCells.filter(m=>m.material.emissiveIntensity>.4).length,distributionUnits:1,waterHeat:heatUniforms.uHeat.value,bubbleCount:boilerBubbles?.visible?boilerBubbles.count:0,circuits:electricalCircuits.map(({type,phase,points})=>({type,phase,start:points[0],end:points.at(-1)})),drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,phase:s.phase,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};
