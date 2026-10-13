@@ -6,23 +6,23 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const state = { mode:'cutaway', step:'overview', started:false, playing:false, follow:!reduceMotion, speed:1, time:0, phase:0, rendered:false, stage:'idle' };
-let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment,fireLight,sparks,loadLight,loadBulb,loadFilament,loadHalo,loadPool,boilerBubbles,drumLiquid,generatorCoils;
+let scene,camera,renderer,controls,root,rotor,magnet,pmrem,environment,fireLight,sparks,loadLight,loadLens,loadHalo,loadPool,streetPole,boilerBubbles,drumLiquid,generatorCoils;
 const flowMaterials=[],covers=[],boilerWalls=[],flowSystems=[],flames=[],pickables=[],parts={},fieldMaterials=[];
 const electricalCircuits=[],heaterMaterials=[];
 const DURATION=32, LAMP_ON=26.2;
 const heatUniforms={uHeat:{value:0}};
-const lampUniforms={uLight:{value:0}};
+let loadArrival=0;
 const stages = [
  {at:0,name:'condenser'}, {at:1,name:'feedwater'}, {at:5.8,name:'boiler'},
  {at:9.6,name:'superheater'}, {at:11.6,name:'steam'}, {at:12.7,name:'turbine'},
- {at:17,name:'generator'}, {at:20,name:'transmission'}, {at:24,name:'load'}, {at:26.2,name:'light'}, {at:32,name:'complete'}
+ {at:17,name:'generator'}, {at:20,name:'distribution'}, {at:24,name:'load'}, {at:26.2,name:'light'}, {at:32,name:'complete'}
 ];
 const timings = {
  water:{start:1,velocity:1.65},boiler:{start:5.8,velocity:1.1},
  superheater:{start:9.6,velocity:6.5},steam:{start:11.6,velocity:10.5},
  internal:{start:12.25,velocity:9},'steam-out':{start:13,velocity:3.5},
  condensation:{start:14.8,velocity:.8},'heat-transfer':{start:14.8,velocity:.6},
- electric:{start:13.4,velocity:4.4},transmission:{start:20,velocity:5.4},'load-electric':{start:25,velocity:5.4},
+ electric:{start:13.4,velocity:4.4},'load-electric':{start:24.1,velocity:5.4},
  'heat-in':{start:6,velocity:1.4},downcomer:{start:5.4,velocity:.8},
  cooling:{start:.35,velocity:1.1},exhaust:{start:5.8,velocity:1.4}
 };
@@ -239,7 +239,7 @@ function buildPipesAndGrid(){
  flowPipe([[-.8,.46,1.44],[-1.4,.5,2.2],[-3.25,.6,2.15],[-4.2,.65,2.15],[-5.0,.82,2.0],[-5.05,1.1,-1.5]],.12,water,0xb9e3ff,.11,'water');
  buildElectricalGrid();
 }
-// Phase conductors stay separate from generator terminals to the receiving transformer.
+// Three distinct conductors connect the generator to one compact distribution transformer.
 const phaseSleeves=[0xb46350,0xc8a842,0x588ca2].map(color=>new THREE.MeshStandardMaterial({color,roughness:.5}));
 const conductor=new THREE.MeshStandardMaterial({color:0x3d4947,metalness:.55,roughness:.45});
 const porcelain=new THREE.MeshStandardMaterial({color:0xdadcc6,roughness:.24,metalness:.12});
@@ -249,52 +249,32 @@ function insulator(x,y,z,height,parent=root){
  for(let i=0;i<discs;i++)cylinder(.115,.14,.045,[x,y+.05+i*(height-.09)/discs,z],porcelain,parent,'y',16);
  return [x,y+height,z];
 }
-function electricalPath(points,type,phase,parent){
- const cable=pipe(points,.033,conductor,parent);
- const inst=flow(cable.curve,0xffdb54,15,.13,type,.07);
+function electricalPath(points,type,phase,parent,radius=.033,markerRadius=.07){
+ const cable=pipe(points,radius,conductor,parent);
+ const inst=flow(cable.curve,0xffdb54,15,.13,type,markerRadius);
  const system=flowSystems.at(-1);system.phase=phase;
  electricalCircuits.push({type,phase,points});
  return inst;
 }
-function transformer(x,z,parent){
- box([2.05,.18,3.3],[x,.39,z],pale,parent);
- box([1.45,1.26,2.65],[x,1.12,z],support,parent);
- box([1.56,.13,2.78],[x,1.8,z],cream,parent);
- for(let side of [-1,1])for(let i=0;i<11;i++)box([.3,.95,.055],[x+side*.82,1.1,z-1.13+i*.225],dark,parent);
- cylinder(.18,.18,1.95,[x,2.14,z],cream,parent,'z'); // oil conservator
- for(let zz of [-.8,.8])lineBetween([x,1.8,z+zz],[x,2.0,z+zz],.04,steel,parent);
-}
 function buildElectricalGrid(){
- const g=group('grid');transformer(8,-2,g);transformer(13.6,-2,g);
- // Three independent low-voltage and high-voltage bushings on each transformer.
+ const g=group('grid');
+ // Switching and protection are enclosed. Long-distance transmission is omitted.
+ box([1.9,.16,2.05],[8.15,.39,-1.05],pale,g);
+ box([1.5,1.18,1.7],[8.15,1.06,-1.05],support,g);
+ box([1.65,.12,1.86],[8.15,1.7,-1.05],cream,g);
+ for(let side of [-1,1])for(let i=0;i<6;i++)box([.13,.81,.055],[8.15+side*.8,1.06,-1.7+i*.26],dark,g);
+ // Front access panel, handle and two separate low-voltage terminals.
+ box([1.14,.87,.035],[8.15,1.07,-.18],cream,g);
+ box([.055,.18,.045],[8.52,1.08,-.15],dark,g);
  for(let phase=0;phase<3;phase++){
-  const z=-3.05+phase*1.05;
-  const lv=insulator(7.48,1.9,z,.44,g),hv=insulator(8.53,1.9,z,.73,g);
-  const receiver=insulator(13.08,1.9,z,.66,g);
-  cylinder(.087,.087,.13,[7.48,2.2,z],phaseSleeves[phase],g,'y',12);
-  electricalPath([[4.1+phase*.6,2.55,1.59],[4.1+phase*.6,1.15,1.82+phase*.22],[5.9+phase*.2,.5,1.82+phase*.22],[6.62+phase*.19,.6,z],[6.87,1.55,z],lv],'electric',phase,g);
-  // Separate disconnector, circuit breaker, and outgoing disconnector for every phase.
-  box([2.65,.12,.46],[10.28,.39,z],pale,g);
-  const a=insulator(9.28,1.02,z,.78,g),b=insulator(9.68,1.02,z,.78,g);
-  for(const x of [9.28,9.68,11.05,11.46])box([.10,.63,.1],[x,.70,z],support,g);
-  lineBetween(a,b,.043,copper,g); // closed knife-switch blade
-  cylinder(.16,.16,.54,[10.28,.78,z],dark,g,'y',16);
-  insulator(10.28,1.05,z,.99,g); // breaker interrupting chamber
-  const c=insulator(11.05,1.02,z,.78,g),d=insulator(11.46,1.02,z,.78,g);
-  lineBetween(c,d,.043,copper,g);
-  electricalPath([hv,[8.91,2.39,z],a,b,[10.28,2.04,z],c,d,[12.08,3.43,z],[12.75,3.13,z],receiver],'transmission',phase,g);
+  const z=-1.65+phase*.58,terminal=insulator(7.7,1.77,z,.35,g);
+  cylinder(.083,.083,.07,[7.7,2.05,z],phaseSleeves[phase],g,'y',12);
+  electricalPath([[4.1+phase*.6,2.55,1.59],[4.1+phase*.6,1.15,1.82+phase*.22],[5.9+phase*.2,.5,1.82+phase*.22],[6.67+phase*.19,.6,z],[7.07,1.62,z],terminal],'electric',phase,g);
  }
- // Steel gantry with three separate suspension insulators, one for each conductor.
- for(const z of [-3.8,-.2]){
-  box([.47,.12,.47],[12.08,.4,z],pale,g);
-  lineBetween([12.08,.4,z],[12.08,4.02,z],.062,support,g);
+ for(let x of [8.02,8.4]){
+  cylinder(.06,.06,.14,[x,.85,-.07],porcelain,g,'z',12);
+  torus(.067,.018,[x,.85,.01],dark,g,'z');
  }
- lineBetween([12.08,4.02,-3.8],[12.08,4.02,-.2],.08,support,g);
- for(let i=0;i<3;i++)insulator(12.08,3.43,-3.05+i*1.05,.59,g);
- // The receiving transformer supplies a two-wire, single-phase lamp branch.
- insulator(13.34,1.23,-.47,.40,g);insulator(13.88,1.23,-.47,.40,g);
- pipe([[13.88,1.63,-.47],[14.45,1.2,-.35],[14.45,.29,-.35]],.018,copper,g);
- cylinder(.035,.035,.4,[14.45,.3,-.35],copper,g,'y',10);
 }
 
 function buildBase(){
@@ -348,31 +328,35 @@ function radialTexture(){
  ctx.fillStyle=gradient;ctx.fillRect(0,0,128,128);return new THREE.CanvasTexture(c);
 }
 function buildLoad(){
- const g=group('load'),x=12.2,z=2.35;
- box([1.4,.18,1.1],[x,.42,z],dark,g);box([1.15,.09,.9],[x,.55,z],cream,g);
- cylinder(.36,.43,.35,[x,.76,z],porcelain,g,'y');
- cylinder(.25,.25,.35,[x,1.03,z],steel,g,'y');
- for(let i=0;i<5;i++)torus(.255,.025,[x,.9+i*.062,z],dark,g,'y');
- const profile=[[.205,0],[.215,.15],[.32,.31],[.46,.46],[.56,.65],[.58,.86],[.54,1.07],[.4,1.27],[.21,1.4],[0,1.45]].map(p=>new THREE.Vector2(...p));
- loadBulb=mesh(new THREE.LatheGeometry(profile,48),new THREE.MeshStandardMaterial({color:0xb8c8c7,transparent:true,opacity:.21,roughness:.16,metalness:.06,emissive:0xffb72e,emissiveIntensity:0,side:THREE.DoubleSide,depthWrite:false}),[x,1.18,z],g);
- loadBulb.castShadow=false;
- const rimMaterial=new THREE.ShaderMaterial({uniforms:lampUniforms,transparent:true,depthWrite:false,
-  vertexShader:`varying vec3 n;varying vec3 eye;void main(){vec4 p=modelViewMatrix*vec4(position,1.);n=normalize(normalMatrix*normal);eye=normalize(-p.xyz);gl_Position=projectionMatrix*p;}`,
-  fragmentShader:`uniform float uLight;varying vec3 n;varying vec3 eye;void main(){float rim=pow(1.-abs(dot(normalize(n),normalize(eye))),2.2);vec3 c=mix(vec3(.26,.40,.43),vec3(1.,.67,.20),uLight);gl_FragColor=vec4(c,rim*.72);#include <colorspace_fragment>}`.replace(';#include',';\n#include')
- });
- const glassRim=mesh(loadBulb.geometry,rimMaterial,[x,1.18,z],g);glassRim.castShadow=false;
- const filamentMat=new THREE.MeshStandardMaterial({color:0x292825,emissive:0xffd784,emissiveIntensity:0,roughness:.65});
- // Both filament ends have separate support wires and socket contacts: a closed load circuit.
- for(const side of [-1,1])lineBetween([x+side*.07,1.13,z],[x+side*.28,1.99,z],.016,steel,g);
- const coil=[];for(let i=0;i<=160;i++){const f=i/160;coil.push([x-.28+f*.56,1.99+Math.sin(f*Math.PI*24)*.033,z+Math.cos(f*Math.PI*24)*.033]);}
- loadFilament=pipe(coil,.012,filamentMat,g).mesh;
+ const g=group('load'),x=12.2,z=-.97;
+ // A short everyday street replaces the demonstration bulb.
+ const asphalt=new THREE.MeshStandardMaterial({color:0x3b4446,roughness:1});
+ const curb=new THREE.MeshStandardMaterial({color:0xc4cbc0,roughness:.9});
+ const paint=new THREE.MeshStandardMaterial({color:0xe3e5d9,roughness:.85});
+ box([5.7,.065,3.2],[12.35,.315,1.2],asphalt,g);
+ box([5.7,.17,1.1],[12.35,.367,-.96],curb,g);
+ for(let i=0;i<11;i++)box([.49,.15,.13],[9.75+i*.52,.39,-.37],pale,g);
+ for(let xx=10;xx<15;xx+=1.35)box([.68,.006,.045],[xx,.351,1.2],paint,g);
+ for(let zz of [-.25,2.64])box([5.5,.006,.045],[12.35,.351,zz],paint,g);
+ for(let zz=-.08;zz<2.55;zz+=.43)box([.67,.007,.22],[14.72,.352,zz],paint,g);
+ // Tapered pole, curved arm and a flat LED luminaire.
+ box([.45,.12,.45],[x,.51,z],dark,g);
+ for(let dx of [-.15,.15])for(let dz of [-.15,.15])cylinder(.024,.024,.055,[x+dx,.59,z+dz],steel,g,'y',6);
+ streetPole=steel.clone();streetPole.transparent=true;streetPole.opacity=.45;streetPole.depthWrite=false;
+ cylinder(.075,.13,4.08,[x,2.61,z],streetPole,g,'y',24);
+ cylinder(.145,.155,.32,[x,.73,z],dark,g,'y',24);
+ pipe([[x,4.6,z],[x,4.89,-.72],[x,5.05,-.15],[x,5.05,.64]],.073,streetPole,g);
+ const housing=mesh(new THREE.SphereGeometry(1,24,12),dark,[x,5.035,.96],g);housing.scale.set(.36,.12,.72);
+ loadLens=box([.54,.065,1.10],[x,4.935,.96],new THREE.MeshStandardMaterial({color:0x657575,emissive:0xffdea0,emissiveIntensity:0,roughness:.25}),g);loadLens.castShadow=false;
+ for(let i=0;i<5;i++)box([.52,.025,.025],[x,5.14,.63+i*.15],steel,g);
  const glowTexture=radialTexture();
- loadHalo=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTexture,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}));loadHalo.position.set(x,2.04,z);loadHalo.scale.set(3.6,3.6,1);g.add(loadHalo);
- loadPool=mesh(new THREE.PlaneGeometry(6,6),new THREE.MeshBasicMaterial({map:glowTexture,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}),[x,.30,z],g);loadPool.rotation.x=-Math.PI/2;loadPool.castShadow=false;
- loadLight=new THREE.PointLight(0xffbf4c,0,10,2);loadLight.position.set(x,2.06,z);g.add(loadLight);
- electricalPath([[13.34,1.63,-.47],[13.25,.48,.25],[12.56,.42,1.45],[12.53,.55,2.35],[12.33,.79,2.35],[12.27,1.13,2.35]],'load-electric',0,g);
- electricalPath([[12.13,1.13,2.35],[12.01,.79,2.35],[11.83,.55,2.35],[11.79,.42,1.16],[13.88,.48,.25],[13.88,1.63,-.47]],'load-electric',1,g);
- // The second line is the return conductor, with no travelling-energy markers.
+ loadHalo=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTexture,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}));loadHalo.position.set(x,4.925,.96);loadHalo.scale.set(1.5,1.0,1);g.add(loadHalo);
+ loadPool=mesh(new THREE.PlaneGeometry(4.15,3.0),new THREE.MeshBasicMaterial({map:glowTexture,transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false}),[x,.359,1.19],g);loadPool.rotation.x=-Math.PI/2;loadPool.castShadow=false;
+ loadLight=new THREE.SpotLight(0xffdf9b,0,9,.48,.67,2);loadLight.position.set(x,4.88,.96);loadLight.target.position.set(x,.35,1.2);g.add(loadLight,loadLight.target);
+ // The two conductors run along the sidewalk and inside the pole to the fixture.
+ electricalPath([[8.02,.85,.01],[8.75,.58,-.57],[9.3,.55,-1.04],[9.8,.55,-1.04],[11.4,.55,-1.04],[11.8,.55,-1.04],[x-.035,.84,z],[x-.035,4.59,z],[x-.035,4.86,-.69],[x-.035,5.00,-.14],[x-.035,4.94,.45]],'load-electric',0,g,.013,.044);
+ const supply=flowSystems.at(-1);loadArrival=supply.start+supply.length/supply.velocity;
+ electricalPath([[x+.035,4.94,.45],[x+.035,5.00,-.14],[x+.035,4.86,-.69],[x+.035,4.59,z],[x+.035,.84,z],[11.8,.55,-.85],[11.4,.55,-.85],[9.8,.55,-.85],[9.34,.55,-.85],[8.95,.58,-.39],[8.4,.85,.01]],'load-electric',1,g,.013,.044);
  flowSystems.at(-1).returnConductor=true;
 }
 
@@ -382,8 +366,8 @@ const viewpoints={
  turbine:{target:[-.5,3.2,0],offset:[5.7,4.25,8.4]},
  generator:{target:[4.65,3.3,0],offset:[5.0,3.0,6.5]},
  condenser:{target:[-.7,1.15,1.4],offset:[6.0,3.8,8.7]},
- grid:{target:[10.4,1.9,-1.8],offset:[5,6.3,8.8]},
- load:{target:[12.2,1.55,2.35],offset:[4.5,2.7,7.4]}
+ grid:{target:[8.15,1.65,-.05],offset:[5.2,4.0,8.0]},
+ load:{target:[11.8,2.5,.5],offset:[4.6,1.8,9.6]}
 };
 const tourNodes=[
  {t:0,...viewpoints.overview},{t:1.8,...viewpoints.condenser},
@@ -484,10 +468,10 @@ function updateVisuals(dt){
  const power=state.started?ramp(t,13.1,15.0):0;
  generatorCoils.emissiveIntensity=power*.42;
  for(const mat of fieldMaterials)mat.opacity=power*(.22+.42*Math.abs(Math.sin(state.phase)));
- const light=state.started?ramp(t,LAMP_ON,LAMP_ON+.65):0;
- lampUniforms.uLight.value=light;loadBulb.material.emissiveIntensity=light*1.6;loadBulb.material.opacity=.21+light*.25;
- loadFilament.material.emissiveIntensity=light*16;loadFilament.material.color.set(light>.01?0xffe6aa:0x292825);
- loadHalo.material.opacity=light*.44;loadPool.material.opacity=light*.65;loadLight.intensity=light*38;
+ const lightAt=Math.max(LAMP_ON,loadArrival),light=state.started?ramp(t,lightAt,lightAt+.65):0;
+ streetPole.opacity=state.mode==='outside'?1:.45;streetPole.depthWrite=state.mode==='outside';
+ loadLens.material.emissiveIntensity=light*5;loadLens.material.color.set(light>.01?0xffedbf:0x657575);
+ loadHalo.material.opacity=light*.64;loadPool.material.opacity=light*.9;loadLight.intensity=light*165;
  $('#timeline').value=Math.min(DURATION,t);$('#timeline').style.setProperty('--progress',`${Math.min(t/DURATION,1)*100}%`);
 }
 function animate(now){
@@ -498,4 +482,4 @@ function animate(now){
  updateVisuals(dt);controls.update();renderer.render(scene,camera);state.rendered=true;
 }
 try{init();}catch(err){console.error(err);$('#loading').hidden=false;$('#loading').className='error';$('#loading').innerHTML='<div>3Dを表示できませんでした。</div><button onclick="location.reload()">再読み込み</button>';$$('button,select,input').forEach(b=>{if(!b.closest('#loading'))b.disabled=true;});}
-window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,filamentPower:loadFilament?.material.emissiveIntensity,waterHeat:heatUniforms.uHeat.value,bubbleCount:boilerBubbles?.visible?boilerBubbles.count:0,circuits:electricalCircuits.map(({type,phase,points})=>({type,phase,start:points[0],end:points.at(-1)})),drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,phase:s.phase,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};
+window.energyLab={snapshot:()=>({...state,rotorAngle:rotor?.rotation.x,magnetAngle:magnet?.rotation.x,flamePower:fireUniforms.uBurn.value,lightPower:loadLight?.intensity,luminairePower:loadLens?.material.emissiveIntensity,roadGlow:loadPool?.material.opacity,loadArrival,loadKind:'streetlight',distributionUnits:1,waterHeat:heatUniforms.uHeat.value,bubbleCount:boilerBubbles?.visible?boilerBubbles.count:0,circuits:electricalCircuits.map(({type,phase,points})=>({type,phase,start:points[0],end:points.at(-1)})),drawCalls:renderer?.info.render.calls,visibleCovers:covers.filter(c=>c.obj.visible).length,camera:camera?.position.toArray(),target:controls?.target.toArray(),flows:flowSystems.map(s=>({type:s.type,phase:s.phase,velocity:s.velocity,count:s.inst.visible?s.visibleCount:0}))})};
